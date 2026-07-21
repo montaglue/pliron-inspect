@@ -1,0 +1,31 @@
+{
+  "name": "pliron-inspect-frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "visual:cfg": "node scripts/cfg-visual-check.mjs"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "@viz-js/viz": "^3.27.0",
+    "@xyflow/react": "^12.11.0",
+    "cytoscape": "^3.30.3",
+    "d3": "^7.9.0",
+    "d3-flextree": "^2.1.2",
+    "monaco-editor": "^0.52.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "@types/d3": "^7.4.3",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1"
+  }
+}

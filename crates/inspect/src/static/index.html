@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>pliron-inspect</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #15171a;
+        color: #e5e7eb;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+      }
+      main {
+        width: min(760px, calc(100vw - 48px));
+        border: 1px solid #30363d;
+        border-radius: 8px;
+        background: #1d2024;
+        padding: 24px;
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: 20px;
+        font-weight: 650;
+      }
+      p {
+        margin: 8px 0;
+        color: #aeb6c2;
+        line-height: 1.5;
+      }
+      code {
+        color: #9cdcfe;
+      }
+      a {
+        color: #7dd3fc;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>pliron-inspect</h1>
+      <p>The display server is running. Build the React frontend with <code>npm run build</code> in <code>crates/stair-display/frontend</code> to serve the compiled app from this process.</p>
+      <p>During frontend development, run Vite with <code>npm run dev</code>; API requests are proxied to this server.</p>
+      <p>API check: <a href="/api/capabilities">/api/capabilities</a></p>
+    </main>
+  </body>
+</html>

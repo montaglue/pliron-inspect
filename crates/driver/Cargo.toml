@@ -1,0 +1,15 @@
+[package]
+name = "pliron-inspect-driver"
+description = "Driver library for pliron-inspect: render documents + stdio protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pliron.workspace = true
+pliron-inspect-protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+flowblocks = "0.2"
+clap.workspace = true

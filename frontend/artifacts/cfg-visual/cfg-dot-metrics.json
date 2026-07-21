@@ -1,0 +1,34 @@
+{
+  "renderer": "Graphviz dot via @viz-js/viz",
+  "screenshotPath": "/Users/montaglue/projects/montaglue/stair/crates/stair-display/frontend/artifacts/cfg-visual/cfg-dot.png",
+  "metricsPath": "/Users/montaglue/projects/montaglue/stair/crates/stair-display/frontend/artifacts/cfg-visual/cfg-dot-metrics.json",
+  "nodeCount": 4,
+  "edgeCount": 6,
+  "intersections": [],
+  "edges": [
+    {
+      "id": "entry->then",
+      "sampled": 47
+    },
+    {
+      "id": "entry->loop",
+      "sampled": 47
+    },
+    {
+      "id": "then->exit",
+      "sampled": 47
+    },
+    {
+      "id": "loop->exit",
+      "sampled": 47
+    },
+    {
+      "id": "loop->loop__again__self_loop",
+      "sampled": 47
+    },
+    {
+      "id": "loop__again__self_loop->loop",
+      "sampled": 47
+    }
+  ]
+}
