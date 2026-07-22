@@ -4,6 +4,10 @@ description = "Wire types for pliron-inspect"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords = ["pliron", "compiler", "ir", "protocol"]
+categories = ["compilers"]
 
 [dependencies]
 serde.workspace = true

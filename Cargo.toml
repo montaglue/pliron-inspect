@@ -6,11 +6,14 @@ members = ["crates/*"]
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
+repository = "https://github.com/montaglue/pliron-inspect"
+readme = "README.md"
 
 [workspace.dependencies]
-pliron = { path = "../pliron-master" }
-pliron-inspect-protocol = { path = "crates/protocol" }
-pliron-inspect-driver = { path = "crates/driver" }
+pliron = { version = "0.16.0", git = "https://github.com/pliron-org/pliron.git", rev = "4750abfdc8823b30baffaf505ae7201a58522d34" }
+pliron-llvm = { version = "0.16.0", git = "https://github.com/pliron-org/pliron.git", rev = "4750abfdc8823b30baffaf505ae7201a58522d34", default-features = false }
+pliron-inspect-protocol = { version = "0.1.0", path = "crates/protocol" }
+pliron-inspect-driver = { version = "0.1.0", path = "crates/driver" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"

@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use server::{AppState, build_router};
 
 #[derive(ClapParser)]
-#[command(name = "stair-display")]
-#[command(about = "Interactive STAIR IR display")]
+#[command(name = "pliron-inspect")]
+#[command(about = "Interactive pliron IR inspector")]
 struct Args {
     /// Port to run the server on.
     #[arg(short, long, default_value = "3000")]

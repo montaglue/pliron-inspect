@@ -526,6 +526,8 @@ version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
 dependencies = [
+ "allocator-api2",
+ "equivalent",
  "foldhash 0.1.5",
 ]
 
@@ -534,11 +536,6 @@ name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
-dependencies = [
- "allocator-api2",
- "equivalent",
- "foldhash 0.2.0",
-]
 
 [[package]]
 name = "heck"
@@ -857,12 +854,13 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 [[package]]
 name = "pliron"
 version = "0.16.0"
+source = "git+https://github.com/pliron-org/pliron.git?rev=4750abfdc8823b30baffaf505ae7201a58522d34#4750abfdc8823b30baffaf505ae7201a58522d34"
 dependencies = [
  "awint",
  "combine",
  "downcast-rs",
  "dyn-clone",
- "hashbrown 0.17.1",
+ "hashbrown 0.15.5",
  "hi_sparse_bitset",
  "inventory",
  "linkme",
@@ -880,6 +878,7 @@ dependencies = [
 [[package]]
 name = "pliron-derive"
 version = "0.16.0"
+source = "git+https://github.com/pliron-org/pliron.git?rev=4750abfdc8823b30baffaf505ae7201a58522d34#4750abfdc8823b30baffaf505ae7201a58522d34"
 dependencies = [
  "combine",
  "convert_case",
@@ -913,6 +912,7 @@ dependencies = [
  "flowblocks",
  "pliron",
  "pliron-inspect-protocol",
+ "pliron-llvm",
  "serde",
  "serde_json",
 ]
@@ -924,6 +924,17 @@ dependencies = [
  "anyhow",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "pliron-llvm"
+version = "0.16.0"
+source = "git+https://github.com/pliron-org/pliron.git?rev=4750abfdc8823b30baffaf505ae7201a58522d34#4750abfdc8823b30baffaf505ae7201a58522d34"
+dependencies = [
+ "bitflags",
+ "log",
+ "pliron",
+ "thiserror",
 ]
 
 [[package]]

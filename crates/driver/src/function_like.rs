@@ -10,8 +10,8 @@
 use pliron::{
     context::{Context, Ptr},
     op::Op,
-    derive::op_interface,
-    builtin::op_interfaces::{OneRegionInterface, SymbolOpInterface},
+    derive::{op_interface, op_interface_impl},
+    builtin::op_interfaces::SymbolOpInterface,
     region::Region,
     result::Result,
 };
@@ -19,10 +19,10 @@ use pliron::{
 /// An [Op] that owns an executable function-like body, analogous to MLIR's
 /// FunctionOpInterface.
 #[op_interface]
-pub trait FunctionLikeInterface: OneRegionInterface + SymbolOpInterface {
+pub trait FunctionLikeInterface: SymbolOpInterface {
     /// Return the function body region. Declarations should return `None`.
     fn body_region(&self, ctx: &Context) -> Option<Ptr<Region>> {
-        Some(self.get_region(ctx))
+        self.get_operation().deref(ctx).regions().next()
     }
 
     /// User-facing name, e.g. for tooling to label roots.
@@ -37,3 +37,6 @@ pub trait FunctionLikeInterface: OneRegionInterface + SymbolOpInterface {
         Ok(())
     }
 }
+
+#[op_interface_impl]
+impl FunctionLikeInterface for pliron_llvm::ops::FuncOp {}

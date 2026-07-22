@@ -4,9 +4,14 @@ description = "Driver library for pliron-inspect: render documents + stdio proto
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords = ["pliron", "compiler", "ir", "driver"]
+categories = ["compilers", "development-tools"]
 
 [dependencies]
 pliron.workspace = true
+pliron-llvm.workspace = true
 pliron-inspect-protocol.workspace = true
 serde.workspace = true
 serde_json.workspace = true
