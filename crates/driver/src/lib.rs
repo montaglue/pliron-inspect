@@ -34,7 +34,7 @@ pub mod dialects {
 }
 pub use pliron::{
     arg_err, arg_err_noloc, arg_error, arg_error_noloc, create_err, create_error,
-    dict_key, impl_verify_succ, indented_block, input_err, input_err_noloc,
+    dict_key, indented_block, input_err, input_err_noloc,
     input_error, input_error_noloc, type_to_trait, verify_err, verify_err_noloc,
     verify_error, verify_error_noloc,
 };
