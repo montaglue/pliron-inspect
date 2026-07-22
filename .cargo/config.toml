@@ -1,0 +1,5 @@
+[env]
+# triskel (via flowblocks) dynamically links Homebrew's libfmt, which is
+# built for the host macOS version. Rust's default deployment target
+# (macOS 11.0) is older, which trips ld's version-mismatch warning.
+MACOSX_DEPLOYMENT_TARGET = "26.0"
