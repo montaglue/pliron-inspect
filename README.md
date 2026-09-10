@@ -63,3 +63,32 @@ and call `run_stdio_driver`, then point `pliron-inspect --driver` at the resulti
 
 Apache-2.0, see [LICENSE](LICENSE). Built on top of [pliron](https://github.com/pliron-org/pliron),
 also Apache-2.0.
+
+
+## Quickstart: analysis server + UI (crabbit)
+
+```sh
+# 1. Build (crabbit repo): the analysis server; (this repo): the UI.
+cd ~/projects/montaglue/crabbit && cargo build -p crabbit-inspect-driver
+cd ~/projects/montaglue/pliron-inspect && cargo build -p pliron-inspect
+
+# 2. Get IR: any crabbit compile with CRABBIT_EMIT_IR=<dir> writes
+#    <crate>-stair_rust.plir next to nothing else you need.
+
+# 3. Start the analysis server (resident compiler):
+~/projects/montaglue/crabbit/target/debug/crabbit-analysisd     --workers 4 --http 127.0.0.1:8177
+
+# 4. Start the UI pointed at it (opens the browser):
+target/debug/pliron-inspect --port 3000 --server 127.0.0.1:8177
+```
+
+In the browser: paste or file-pick the `.plir` → **Load module** → choose
+target/config axes → **Start run** → watch per-pass progress → **inspect**
+on the run row → pick a pass → **Show IR**. In the IR view, click a token
+for hover info, then press **d** (go to definition) or **r** (highlight
+references); **Diagnostics** shows parse/verify state; **artifact**
+downloads the object plus sidecars. `--frontend-dir DIR` serves a built
+frontend from DIR instead of the checkout default.
+
+The end-to-end test for all of the above:
+`python3 tools/e2e_analysis_ui.py <crabbit-analysisd> <pliron-inspect> <module.plir>`.
