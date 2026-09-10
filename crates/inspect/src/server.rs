@@ -22,6 +22,12 @@ pub struct AppState {
     pub driver_binary: Option<String>,
     pub trace_library_dirs: Vec<PathBuf>,
     pub temp_trace_dirs: Vec<PathBuf>,
+    /// Address of a running `crabbit-analysisd` HTTP shim (loopback), if
+    /// the analysis panels are enabled.
+    pub analysis_server: Option<String>,
+    /// Directory holding the built frontend (index.html + assets);
+    /// defaults to `<manifest dir>/frontend/dist`.
+    pub frontend_dir: Option<PathBuf>,
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -33,6 +39,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/traces/import", post(import_trace))
         .route("/api/traces/open", post(open_trace))
         .route("/api/render", post(render_document))
+        .route("/api/analysis", post(analysis_proxy))
+        .route("/api/analysis/health", get(analysis_health))
         .route("/{*path}", get(serve_dist_asset))
         .with_state(state)
 }
@@ -325,19 +333,85 @@ fn diagnostic_document(
     }
 }
 
-async fn serve_index() -> Response {
-    let dist_index = manifest_dir()
-        .join("frontend")
-        .join("dist")
-        .join("index.html");
+/// Forward one server-protocol command object to the analysis server's
+/// HTTP shim and return its JSON verbatim. The whole analysis API is this
+/// single generic route: the frontend speaks the same wire commands as
+/// stdio/curl clients.
+async fn analysis_proxy(
+    State(state): State<AppState>,
+    Json(cmd): Json<serde_json::Value>,
+) -> Response {
+    let Some(addr) = state.analysis_server.clone() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "no analysis server configured; start crabbit-analysisd --http 127.0.0.1:PORT and pass --server 127.0.0.1:PORT"})),
+        )
+            .into_response();
+    };
+    match forward_analysis(&addr, &cmd).await {
+        Ok(value) => Json(value).into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": format!("analysis server unreachable at {addr}: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
+async fn analysis_health(State(state): State<AppState>) -> Response {
+    analysis_proxy(State(state), Json(serde_json::json!({"cmd": "server_health"}))).await
+}
+
+/// Minimal HTTP/1.1 POST to the analysis shim (std TcpStream on a blocking
+/// thread; the shim closes the connection after each response).
+async fn forward_analysis(
+    addr: &str,
+    cmd: &serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    let addr = addr.to_string();
+    let body = cmd.to_string();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
+        use std::io::{Read, Write};
+        let mut stream = std::net::TcpStream::connect(&addr)?;
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(600)))?;
+        write!(
+            stream,
+            "POST / HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )?;
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response)?;
+        let text = String::from_utf8_lossy(&response);
+        let payload = text
+            .split_once("\r\n\r\n")
+            .map(|(_, b)| b)
+            .unwrap_or(&text);
+        Ok(serde_json::from_str(payload)?)
+    })
+    .await?
+}
+
+fn frontend_dir(state: &AppState) -> PathBuf {
+    state
+        .frontend_dir
+        .clone()
+        .unwrap_or_else(|| manifest_dir().join("frontend").join("dist"))
+}
+
+async fn serve_index(State(state): State<AppState>) -> Response {
+    let dist_index = frontend_dir(&state).join("index.html");
     match std::fs::read_to_string(&dist_index) {
         Ok(contents) => Html(contents).into_response(),
         Err(_) => Html(include_str!("static/index.html").to_string()).into_response(),
     }
 }
 
-async fn serve_dist_asset(AxumPath(path): AxumPath<String>) -> Response {
-    let Some(asset_path) = safe_dist_path(&path) else {
+async fn serve_dist_asset(
+    State(state): State<AppState>,
+    AxumPath(path): AxumPath<String>,
+) -> Response {
+    let dist = frontend_dir(&state);
+    let Some(asset_path) = safe_dist_path(&dist, &path) else {
         return (StatusCode::BAD_REQUEST, "invalid asset path").into_response();
     };
 
@@ -346,13 +420,12 @@ async fn serve_dist_asset(AxumPath(path): AxumPath<String>) -> Response {
             let content_type = content_type_for(&asset_path);
             ([(CONTENT_TYPE, content_type)], bytes).into_response()
         }
-        Err(_) => serve_index().await,
+        Err(_) => serve_index(State(state)).await,
     }
 }
 
-fn safe_dist_path(path: &str) -> Option<PathBuf> {
-    let dist = manifest_dir().join("frontend").join("dist");
-    let mut out = dist;
+fn safe_dist_path(dist: &Path, path: &str) -> Option<PathBuf> {
+    let mut out = dist.to_path_buf();
     for component in Path::new(path).components() {
         match component {
             Component::Normal(part) => out.push(part),

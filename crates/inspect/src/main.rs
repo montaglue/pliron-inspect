@@ -30,6 +30,18 @@ struct Args {
     #[arg(long)]
     trace_dir: Option<PathBuf>,
 
+    /// Address of a running `crabbit-analysisd` (or other project
+    /// analysisd) HTTP shim, e.g. 127.0.0.1:8177; enables the analysis
+    /// panels (module upload, runs, per-pass IR with language features).
+    #[arg(long)]
+    server: Option<String>,
+
+    /// Directory with the built frontend (index.html + assets). Defaults
+    /// to the checkout's crates/inspect/frontend/dist; the compiled-in
+    /// fallback page is served when neither exists.
+    #[arg(long)]
+    frontend_dir: Option<PathBuf>,
+
     /// Immutable temporary directory where compiler runs write .stx files.
     ///
     /// Defaults to $STAIR_DISPLAY_TEMP_TRACE_DIR, then STAIR's default temp
@@ -56,6 +68,8 @@ async fn main() -> anyhow::Result<()> {
         driver_binary: args.driver.or_else(default_driver_binary),
         trace_library_dirs,
         temp_trace_dirs,
+        analysis_server: args.server,
+        frontend_dir: args.frontend_dir,
     };
 
     let app = build_router(state);

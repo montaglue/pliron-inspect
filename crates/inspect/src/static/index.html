@@ -1,53 +1,223 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>pliron-inspect</title>
-    <style>
-      :root {
-        color-scheme: dark;
-        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        background: #15171a;
-        color: #e5e7eb;
-      }
-      body {
-        margin: 0;
-        min-height: 100vh;
-        display: grid;
-        place-items: center;
-      }
-      main {
-        width: min(760px, calc(100vw - 48px));
-        border: 1px solid #30363d;
-        border-radius: 8px;
-        background: #1d2024;
-        padding: 24px;
-      }
-      h1 {
-        margin: 0 0 10px;
-        font-size: 20px;
-        font-weight: 650;
-      }
-      p {
-        margin: 8px 0;
-        color: #aeb6c2;
-        line-height: 1.5;
-      }
-      code {
-        color: #9cdcfe;
-      }
-      a {
-        color: #7dd3fc;
-      }
-    </style>
-  </head>
-  <body>
-    <main>
-      <h1>pliron-inspect</h1>
-      <p>The display server is running. Build the React frontend with <code>npm run build</code> in <code>frontend/</code> to serve the compiled app from this process.</p>
-      <p>During frontend development, run Vite with <code>npm run dev</code>; API requests are proxied to this server.</p>
-      <p>API check: <a href="/api/capabilities">/api/capabilities</a></p>
-    </main>
-  </body>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pliron-inspect</title>
+<style>
+:root { color-scheme: dark; font-family: ui-sans-serif, system-ui, sans-serif; background:#15171a; color:#e5e7eb; }
+body { margin:0; padding:16px; }
+h1 { font-size:18px; margin:0 0 12px; }
+h2 { font-size:14px; margin:0 0 8px; color:#c8d1dc; }
+section { border:1px solid #30363d; border-radius:8px; background:#1d2024; padding:12px; margin-bottom:12px; }
+button { background:#2d333b; color:#e5e7eb; border:1px solid #444c56; border-radius:6px; padding:4px 10px; cursor:pointer; }
+button:hover { background:#373e47; }
+select, input[type=text] { background:#22272e; color:#e5e7eb; border:1px solid #444c56; border-radius:6px; padding:3px 6px; }
+textarea { width:100%; box-sizing:border-box; background:#22272e; color:#e5e7eb; border:1px solid #444c56; border-radius:6px; font-family:ui-monospace,monospace; font-size:12px; }
+#irview { font-family:ui-monospace,monospace; font-size:12px; white-space:pre; overflow:auto; max-height:60vh; background:#111318; border:1px solid #30363d; border-radius:6px; padding:8px; line-height:1.45; }
+#irview span.line { display:block; }
+#irview .hl { background:#3b2f00; outline:1px solid #7a6400; }
+#irview .refhl { background:#0e3a2f; }
+.badge { display:inline-block; border-radius:10px; padding:1px 8px; font-size:11px; margin-left:6px; background:#2d333b; }
+.ok { color:#7ee787; } .bad { color:#ff7b72; } .muted { color:#8b949e; }
+#hoverbox { position:fixed; display:none; background:#22272e; border:1px solid #58a6ff; border-radius:6px; padding:6px 10px; font-size:12px; max-width:480px; white-space:pre-wrap; z-index:10; }
+table { border-collapse:collapse; font-size:12px; } td,th { border:1px solid #30363d; padding:2px 8px; text-align:left; }
+.row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin:6px 0; }
+label { font-size:12px; color:#aeb6c2; }
+</style>
+</head>
+<body>
+<h1>pliron-inspect <span id="connbadge" class="badge muted">analysis server: checking…</span></h1>
+
+<section id="modsec">
+<h2>Module</h2>
+<div class="row">
+  <input type="text" id="modname" value="module" size="12">
+  <input type="file" id="modfile">
+  <button id="loadbtn">Load module</button>
+  <span id="modstatus" class="muted"></span>
+</div>
+<textarea id="modtext" rows="6" placeholder="…or paste printed IR (.plir) here"></textarea>
+</section>
+
+<section>
+<h2>Run</h2>
+<div class="row">
+  <label>target <select id="target"></select></label>
+  <label>CRABBIT_REGALLOC <select id="cfg_regalloc"><option value="">linear (default)</option><option>eregalloc</option></select></label>
+  <label>ORACLE <select id="cfg_oracle"><option value="">c0 (default)</option><option>c2</option></select></label>
+  <label>BLOCK_FREQ <select id="cfg_freq"><option value="">uniform (default)</option><option>spectral</option><option>profile</option><option>cmt-provider</option></select></label>
+  <label>MIDEND_DISABLE <input type="text" id="cfg_midend" size="16" placeholder="gvn,licm,divmagic"></label>
+  <label><input type="checkbox" id="cfg_blockmap"> blockmap</label>
+  <label><input type="checkbox" id="cfg_inspect" checked> capture per-pass IR</label>
+  <button id="runbtn">Start run</button>
+</div>
+<table id="runs"><tr><th>run</th><th>target</th><th>config</th><th>status</th><th>progress</th><th></th></tr></table>
+</section>
+
+<section>
+<h2>IR <span id="irmeta" class="muted"></span></h2>
+<div class="row">
+  <label>pass <select id="passsel"></select></label>
+  <button id="irbtn">Show IR</button>
+  <button id="diagbtn">Diagnostics</button>
+  <span class="muted">click a token: hover info · <b>d</b>: go to definition · <b>r</b>: references</span>
+</div>
+<div id="diags"></div>
+<div id="irview" tabindex="0"></div>
+</section>
+<div id="hoverbox"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+let currentRun = null, currentPass = null, runPasses = {}, lastPos = null;
+
+async function api(cmd) {
+  const r = await fetch('/api/analysis', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(cmd)});
+  return r.json();
+}
+
+async function refreshConn() {
+  try {
+    const h = await api({cmd:'server_health'});
+    if (h.ok) { $('connbadge').textContent = `analysis server: ok (${h.workers} workers, ${h.runs} runs)`; $('connbadge').className='badge ok'; return true; }
+    $('connbadge').textContent = 'analysis server: ' + (h.error || 'error'); $('connbadge').className='badge bad';
+  } catch (e) { $('connbadge').textContent = 'analysis server: unreachable'; $('connbadge').className='badge bad'; }
+  return false;
+}
+
+async function loadTargets() {
+  const t = await api({cmd:'list_targets'});
+  for (const name of (t.targets||[])) { const o = document.createElement('option'); o.textContent = name; $('target').append(o); }
+}
+
+$('modfile').onchange = async () => {
+  const f = $('modfile').files[0]; if (!f) return;
+  $('modtext').value = await f.text();
+  if ($('modname').value === 'module') $('modname').value = f.name.replace(/\.plir$/,'');
+};
+
+let moduleId = null;
+$('loadbtn').onclick = async () => {
+  const resp = await api({cmd:'load_module', name:$('modname').value, text:$('modtext').value});
+  if (resp.error) { $('modstatus').textContent = resp.error; $('modstatus').className='bad'; return; }
+  moduleId = resp.moduleId;
+  $('modstatus').textContent = `loaded as module ${moduleId}`; $('modstatus').className='ok';
+};
+
+function config() {
+  const c = {};
+  if ($('cfg_regalloc').value) c.CRABBIT_REGALLOC = $('cfg_regalloc').value;
+  if ($('cfg_oracle').value) c.CRABBIT_REGALLOC_ORACLE = $('cfg_oracle').value;
+  if ($('cfg_freq').value) c.CRABBIT_BLOCK_FREQ = $('cfg_freq').value;
+  if ($('cfg_midend').value) c.CRABBIT_MIDEND_DISABLE = $('cfg_midend').value;
+  if ($('cfg_blockmap').checked) c.CRABBIT_BLOCKMAP = '1';
+  return c;
+}
+
+$('runbtn').onclick = async () => {
+  if (moduleId === null) { alert('load a module first'); return; }
+  const resp = await api({cmd:'start_run', moduleId, target:$('target').value, config:config(), inspect:$('cfg_inspect').checked});
+  if (resp.error) { alert(resp.error); return; }
+  runPasses[resp.runId] = resp.passes;
+  addRunRow(resp.runId, $('target').value, JSON.stringify(config()));
+  pollRun(resp.runId);
+};
+
+function addRunRow(id, target, cfg) {
+  const tr = document.createElement('tr'); tr.id = 'run'+id;
+  tr.innerHTML = `<td>${id}</td><td>${target}</td><td>${cfg}</td><td class="st">queued</td><td class="pg"></td>
+    <td><button onclick="selectRun(${id})">inspect</button> <button onclick="cancelRun(${id})">cancel</button> <button onclick="artifact(${id})">artifact</button></td>`;
+  $('runs').append(tr);
+}
+
+window.cancelRun = id => api({cmd:'cancel_run', runId:id});
+window.selectRun = id => {
+  currentRun = id;
+  $('irmeta').textContent = `(run ${id})`;
+  $('passsel').innerHTML = '';
+  (runPasses[id]||[]).forEach((name, i) => { const o = document.createElement('option'); o.value = i; o.textContent = `${i}: ${name}`; $('passsel').append(o); });
+  $('passsel').selectedIndex = $('passsel').length - 1;
+};
+window.artifact = async id => {
+  const resp = await api({cmd:'run_artifact', runId:id});
+  if (resp.error) { alert(resp.error); return; }
+  const dl = (name, b64) => { const a = document.createElement('a');
+    a.href = 'data:application/octet-stream;base64,'+b64; a.download = name; a.click(); };
+  dl(`run${id}.artifact`, resp.artifactBase64);
+  for (const s of resp.sidecars||[]) dl(`run${id}.${s.name}`, s.base64);
+};
+
+async function pollRun(id) {
+  const st = await api({cmd:'run_status', runId:id});
+  const tr = $('run'+id); if (!tr) return;
+  tr.querySelector('.st').textContent = st.status + (st.error ? ': '+st.error : '');
+  tr.querySelector('.pg').textContent = `${(st.passes||[]).length}/${st.totalPasses}`;
+  if (st.status === 'queued' || st.status === 'running') setTimeout(() => pollRun(id), 400);
+}
+
+$('irbtn').onclick = async () => {
+  if (currentRun === null) { alert('select a run (inspect)'); return; }
+  currentPass = parseInt($('passsel').value);
+  const resp = await api({cmd:'run_ir', runId:currentRun, pass:currentPass});
+  if (resp.error) { alert(resp.error); return; }
+  renderIr(resp.ir);
+  $('irmeta').textContent = `(run ${currentRun}, pass ${resp.pass}, ${resp.source})`;
+};
+
+function renderIr(text) {
+  const view = $('irview'); view.innerHTML = '';
+  text.split('\n').forEach((line, i) => {
+    const span = document.createElement('span');
+    span.className = 'line'; span.dataset.line = i; span.textContent = line || ' ';
+    view.append(span);
+  });
+}
+
+function posFromClick(ev) {
+  const lineEl = ev.target.closest('.line'); if (!lineEl) return null;
+  const range = document.caretRangeFromPoint ? document.caretRangeFromPoint(ev.clientX, ev.clientY) : null;
+  let character = 0;
+  if (range && lineEl.contains(range.startContainer)) character = range.startOffset;
+  return { line: parseInt(lineEl.dataset.line), character };
+}
+
+$('irview').onclick = async ev => {
+  const pos = posFromClick(ev); if (!pos) return; lastPos = pos;
+  const resp = await api({cmd:'ir_hover', runId:currentRun, pass:currentPass, position:pos});
+  const box = $('hoverbox');
+  if (resp.contents) {
+    box.textContent = resp.contents; box.style.display = 'block';
+    box.style.left = Math.min(ev.clientX+8, innerWidth-500)+'px'; box.style.top = (ev.clientY+12)+'px';
+    highlight([resp.range], 'hl');
+  } else { box.style.display = 'none'; highlight([], 'hl'); }
+};
+document.addEventListener('keydown', async ev => {
+  if (!lastPos || currentRun === null) return;
+  if (ev.key === 'd') {
+    const resp = await api({cmd:'ir_definition', runId:currentRun, pass:currentPass, position:lastPos});
+    if (resp.range) { highlight([resp.range], 'hl'); scrollToLine(resp.range.start.line); }
+  } else if (ev.key === 'r') {
+    const resp = await api({cmd:'ir_references', runId:currentRun, pass:currentPass, position:lastPos});
+    highlight(resp.ranges||[], 'refhl');
+    if ((resp.ranges||[]).length) scrollToLine(resp.ranges[0].start.line);
+  }
+});
+function scrollToLine(n) { const el = $('irview').querySelector(`[data-line="${n}"]`); if (el) el.scrollIntoView({block:'center'}); }
+function highlight(ranges, cls) {
+  $('irview').querySelectorAll('.hl,.refhl').forEach(e => e.classList.remove('hl','refhl'));
+  for (const r of ranges) { const el = $('irview').querySelector(`[data-line="${r.start.line}"]`); if (el) el.classList.add(cls); }
+}
+
+$('diagbtn').onclick = async () => {
+  if (currentRun === null) return;
+  const resp = await api({cmd:'ir_diagnostics', runId:currentRun, pass:currentPass});
+  if (resp.error) { $('diags').textContent = resp.error; return; }
+  $('diags').innerHTML = `<span class="${resp.parsed ? 'ok':'bad'}">parsed: ${resp.parsed}</span>` +
+    (resp.diagnostics||[]).map(d => `<div class="bad">L${d.range.start.line+1}: [${d.severity}] ${d.message.split('\n')[0]}</div>`).join('');
+};
+
+(async () => { if (await refreshConn()) await loadTargets(); setInterval(refreshConn, 5000); })();
+</script>
+</body>
 </html>
