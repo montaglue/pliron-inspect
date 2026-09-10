@@ -42,6 +42,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/analysis", post(analysis_proxy))
         .route("/api/analysis/health", get(analysis_health))
         .route("/{*path}", get(serve_dist_asset))
+        .layer(axum::extract::DefaultBodyLimit::max(256 * 1024 * 1024))
         .with_state(state)
 }
 

@@ -176,9 +176,14 @@ function renderIr(text) {
 
 function posFromClick(ev) {
   const lineEl = ev.target.closest('.line'); if (!lineEl) return null;
-  const range = document.caretRangeFromPoint ? document.caretRangeFromPoint(ev.clientX, ev.clientY) : null;
   let character = 0;
-  if (range && lineEl.contains(range.startContainer)) character = range.startOffset;
+  if (document.caretRangeFromPoint) {
+    const range = document.caretRangeFromPoint(ev.clientX, ev.clientY);
+    if (range && lineEl.contains(range.startContainer)) character = range.startOffset;
+  } else if (document.caretPositionFromPoint) { // Firefox
+    const pos = document.caretPositionFromPoint(ev.clientX, ev.clientY);
+    if (pos && lineEl.contains(pos.offsetNode)) character = pos.offset;
+  }
   return { line: parseInt(lineEl.dataset.line), character };
 }
 
