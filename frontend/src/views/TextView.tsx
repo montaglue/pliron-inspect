@@ -6,13 +6,20 @@ import { configureStairMonaco } from "./monacoSetup";
 
 type TextViewProps = {
   snapshots: TraceSnapshot[];
+  step?: number;
+  onStepChange?: (step: number) => void;
 };
 
-export function TextView({ snapshots }: TextViewProps) {
+export function TextView({ snapshots, step, onStepChange }: TextViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const modelRef = useRef<monaco.editor.ITextModel | null>(null);
-  const [currentStep, setCurrentStep] = useState(0);
+  const [localStep, setLocalStep] = useState(0);
+  const currentStep = step ?? localStep;
+  const setCurrentStep = (next: number) => {
+    setLocalStep(next);
+    onStepChange?.(next);
+  };
 
   const currentSnapshot = snapshots[currentStep] ?? null;
   const stepLabel = useMemo(() => {
@@ -21,9 +28,6 @@ export function TextView({ snapshots }: TextViewProps) {
     return `${label} (${currentStep + 1}/${snapshots.length})`;
   }, [currentSnapshot, currentStep, snapshots.length]);
 
-  useEffect(() => {
-    setCurrentStep(0);
-  }, [snapshots]);
 
   useEffect(() => {
     if (snapshots.length === 0) return;
@@ -75,12 +79,12 @@ export function TextView({ snapshots }: TextViewProps) {
       <div className="diff-toolbar">
         <div className={currentSnapshot?.isError ? "step-label error" : "step-label"}>{stepLabel}</div>
         <div className="diff-toolbar-actions">
-          <button type="button" onClick={() => setCurrentStep((step) => Math.max(0, step - 1))} disabled={currentStep <= 0}>
+          <button type="button" onClick={() => setCurrentStep(Math.max(0, currentStep - 1))} disabled={currentStep <= 0}>
             Prev
           </button>
           <button
             type="button"
-            onClick={() => setCurrentStep((step) => Math.min(snapshots.length - 1, step + 1))}
+            onClick={() => setCurrentStep(Math.min(snapshots.length - 1, currentStep + 1))}
             disabled={currentStep >= snapshots.length - 1}
           >
             Next

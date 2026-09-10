@@ -65,6 +65,7 @@ export function App() {
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
   const [activeTrace, setActiveTrace] = useState<OpenTraceResponse | null>(null);
   const [snapshots, setSnapshots] = useState<TraceSnapshot[]>([]);
+  const [snapshotStep, setSnapshotStep] = useState(0);
   const [pipeline, setPipeline] = useState<string[]>(samplePipeline);
   const [tracesLoading, setTracesLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -100,7 +101,7 @@ export function App() {
       view: activeView,
       snapshotId: activeTrace?.filepath ?? "none",
       rootId: activeView === "cfg" ? cfgRootId : undefined,
-      text: snapshots[snapshots.length - 1]?.ir ?? "",
+      text: snapshots[snapshotStep]?.ir ?? snapshots[snapshots.length - 1]?.ir ?? "",
       options: { language: "stair-ir" }
     })
       .then((doc) => {
@@ -108,11 +109,12 @@ export function App() {
         setError(null);
       })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
-  }, [activeTrace?.filepath, activeView, cfgRootId, snapshots]);
+  }, [activeTrace?.filepath, activeView, cfgRootId, snapshots, snapshotStep]);
 
   const activateTrace = (trace: OpenTraceResponse, project?: string) => {
     setActiveTrace(trace);
     setSnapshots(trace.snapshots);
+    setSnapshotStep(trace.snapshots.length > 0 ? trace.snapshots.length - 1 : 0);
     setCfgRootId(undefined);
     if (trace.pipeline.length > 0) {
       setPipeline(trace.pipeline);
@@ -204,7 +206,7 @@ export function App() {
           {error ? <div className="error-banner">{error}</div> : null}
 
           {activeView === "text" ? (
-            <TextView snapshots={snapshots} />
+            <TextView snapshots={snapshots} step={snapshotStep} onStepChange={setSnapshotStep} />
           ) : activeView === "ir-diff" ? (
             snapshots.length > 0 ? (
               <IrDiffView snapshots={snapshots} />

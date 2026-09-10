@@ -770,11 +770,25 @@ fn discover_function_roots(ctx: &Context, root: Ptr<Operation>) -> Vec<FunctionR
 fn collect_function_roots(ctx: &Context, op: Ptr<Operation>, roots: &mut Vec<FunctionRoot>) {
     {
         let op_obj = Operation::get_op_dyn(op, ctx);
-        if let Some(function_like) = op_cast::<dyn FunctionLikeInterface>(&*op_obj)
-            && let Some(body) = function_like.body_region(ctx)
+        // Preferred: an explicit FunctionLikeInterface impl. Fallback: any
+        // symbol-carrying op with a non-empty region — dialects (machine
+        // IR, imported MIR) whose crates cannot implement the foreign
+        // trait (orphan rule) still get CFG/Tree roots this way.
+        let root = if let Some(function_like) = op_cast::<dyn FunctionLikeInterface>(&*op_obj) {
+            function_like.body_region(ctx).map(|body| (body, function_like.display_name(ctx)))
+        } else if let Some(symbol) =
+            op_cast::<dyn pliron::builtin::op_interfaces::SymbolOpInterface>(&*op_obj)
+        {
+            op.deref(ctx)
+                .regions()
+                .next()
+                .map(|body| (body, format!("@{}", symbol.get_symbol_name(ctx))))
+        } else {
+            None
+        };
+        if let Some((body, label)) = root
             && region_has_blocks(ctx, body)
         {
-            let label = function_like.display_name(ctx);
             roots.push(FunctionRoot {
                 entity_id: op_entity_id(op),
                 op,

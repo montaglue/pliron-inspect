@@ -96,6 +96,7 @@ export function CfgView({ document, rootId, onSelectRoot }: CfgViewProps) {
         <div className="cfg-workspace">
           <div className="cfg-canvas">
             <ReactFlow
+              key={`${document?.snapshotId ?? ""}:${layout.nodes[0]?.id ?? ""}:${layout.nodes.length}`}
               nodes={layout.nodes}
               edges={layout.edges}
               nodeTypes={nodeTypes}
