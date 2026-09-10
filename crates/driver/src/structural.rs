@@ -1,4 +1,4 @@
-//! Serializable structural graph view of parsed STAIR IR.
+//! Serializable structural graph view of parsed crabbit IR.
 
 use std::collections::HashMap;
 

@@ -98,7 +98,7 @@ async fn open_trace(State(state): State<AppState>, Json(req): Json<OpenTraceRequ
         None
     };
 
-    let trace = match trace::StairTraceFile::read(&path) {
+    let trace = match trace::CrabbitTraceFile::read(&path) {
         Ok(trace) => trace,
         Err(error) => return error_response(error),
     };
@@ -113,14 +113,14 @@ async fn import_trace(
     let filename = Path::new(&req.filename)
         .file_name()
         .and_then(|filename| filename.to_str())
-        .unwrap_or("trace.stx");
+        .unwrap_or("trace.crt");
     let filename = if filename.ends_with(&format!(".{TRACE_EXTENSION}")) {
         filename.to_string()
     } else {
         format!("{filename}.{TRACE_EXTENSION}")
     };
 
-    let trace = match trace::StairTraceFile::from_stx_str(&req.contents) {
+    let trace = match trace::CrabbitTraceFile::from_crt_str(&req.contents) {
         Ok(trace) => trace,
         Err(error) => {
             return error_response(anyhow::anyhow!(
@@ -167,7 +167,7 @@ async fn import_trace(
 fn trace_response(
     path: PathBuf,
     imported_from: Option<String>,
-    trace: trace::StairTraceFile,
+    trace: trace::CrabbitTraceFile,
 ) -> Response {
     let filename = path
         .file_name()
@@ -260,7 +260,7 @@ async fn render_document(
                     .options
                     .get("language")
                     .and_then(|value| value.as_str())
-                    .unwrap_or("stair-ir")
+                    .unwrap_or("crabbit-ir")
                     .to_string(),
                 text: req.text.unwrap_or_default(),
                 spans: vec![],
@@ -525,8 +525,8 @@ fn import_temp_trace(state: &AppState, source: &Path) -> anyhow::Result<PathBuf>
 
 fn discover_trace_projects(
     dirs: &[PathBuf],
-) -> anyhow::Result<Vec<pliron_inspect_protocol::trace::StairTraceProjectInfo>> {
-    let mut merged: BTreeMap<String, Vec<pliron_inspect_protocol::trace::StairTraceFileInfo>> = BTreeMap::new();
+) -> anyhow::Result<Vec<pliron_inspect_protocol::trace::CrabbitTraceProjectInfo>> {
+    let mut merged: BTreeMap<String, Vec<pliron_inspect_protocol::trace::CrabbitTraceFileInfo>> = BTreeMap::new();
     for dir in dirs {
         for project in trace::discover_trace_projects(dir)? {
             merged
@@ -541,18 +541,18 @@ fn discover_trace_projects(
             versions.sort_by(|left, right| left.filepath.cmp(&right.filepath));
             versions.dedup_by(|left, right| left.filepath == right.filepath);
             trace::sort_versions_newest_first(&mut versions);
-            pliron_inspect_protocol::trace::StairTraceProjectInfo { name, versions }
+            pliron_inspect_protocol::trace::CrabbitTraceProjectInfo { name, versions }
         })
         .collect())
 }
 
 fn canonical_trace_info(
-    trace: pliron_inspect_protocol::trace::StairTraceFileInfo,
-) -> pliron_inspect_protocol::trace::StairTraceFileInfo {
+    trace: pliron_inspect_protocol::trace::CrabbitTraceFileInfo,
+) -> pliron_inspect_protocol::trace::CrabbitTraceFileInfo {
     let filepath = std::fs::canonicalize(&trace.filepath)
         .map(|path| path.to_string_lossy().to_string())
         .unwrap_or(trace.filepath);
-    pliron_inspect_protocol::trace::StairTraceFileInfo { filepath, ..trace }
+    pliron_inspect_protocol::trace::CrabbitTraceFileInfo { filepath, ..trace }
 }
 
 fn display_dirs(dirs: &[PathBuf]) -> Vec<String> {

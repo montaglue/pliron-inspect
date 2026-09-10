@@ -18,8 +18,8 @@ pub struct ErrorResponse {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TraceListResponse {
-    pub library_projects: Vec<crate::trace::StairTraceProjectInfo>,
-    pub temp_projects: Vec<crate::trace::StairTraceProjectInfo>,
+    pub library_projects: Vec<crate::trace::CrabbitTraceProjectInfo>,
+    pub temp_projects: Vec<crate::trace::CrabbitTraceProjectInfo>,
     pub library_dirs: Vec<String>,
     pub temp_dirs: Vec<String>,
 }
@@ -44,7 +44,7 @@ pub struct OpenTraceResponse {
     pub filename: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub imported_from: Option<String>,
-    pub meta: crate::trace::StairTraceMeta,
+    pub meta: crate::trace::CrabbitTraceMeta,
     pub snapshots: Vec<TraceSnapshot>,
     pub pipeline: Vec<String>,
 }

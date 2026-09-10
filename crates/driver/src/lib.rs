@@ -23,7 +23,7 @@ pub use pliron::{
 };
 pub mod result {
     pub use pliron::result::*;
-    pub type STAIRResult<T> = pliron::result::Result<T>;
+    pub type CrabbitResult<T> = pliron::result::Result<T>;
 }
 pub mod ir {
     pub use pliron::{

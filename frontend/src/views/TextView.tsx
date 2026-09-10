@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api";
 
 import type { TraceSnapshot } from "../api/protocol";
-import { configureStairMonaco } from "./monacoSetup";
+import { configureCrabbitMonaco } from "./monacoSetup";
 
 type TextViewProps = {
   snapshots: TraceSnapshot[];
@@ -32,15 +32,15 @@ export function TextView({ snapshots, step, onStepChange }: TextViewProps) {
   useEffect(() => {
     if (snapshots.length === 0) return;
 
-    configureStairMonaco();
+    configureCrabbitMonaco();
 
     if (!containerRef.current || editorRef.current) return;
 
     editorRef.current = monaco.editor.create(containerRef.current, {
       readOnly: true,
       automaticLayout: true,
-      theme: "stair-dark",
-      language: "stair-ir",
+      theme: "crabbit-dark",
+      language: "crabbit-ir",
       minimap: { enabled: false },
       scrollBeyondLastLine: false,
       wordWrap: "off"
@@ -59,7 +59,7 @@ export function TextView({ snapshots, step, onStepChange }: TextViewProps) {
     if (!editor || !currentSnapshot) return;
 
     modelRef.current?.dispose();
-    modelRef.current = monaco.editor.createModel(currentSnapshot.ir, currentSnapshot.isError ? "plaintext" : "stair-ir");
+    modelRef.current = monaco.editor.createModel(currentSnapshot.ir, currentSnapshot.isError ? "plaintext" : "crabbit-ir");
     editor.setModel(modelRef.current);
     editor.setScrollTop(0);
     editor.setScrollLeft(0);

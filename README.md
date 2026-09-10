@@ -53,7 +53,7 @@ This opens a browser at `http://127.0.0.1:3000` by default. Useful flags:
 | `--port <PORT>` | Port to serve on (default `3000`) |
 | `--no-open` | Don't open a browser automatically |
 | `--driver <PATH>` | Path to a driver binary for CFG/Tree rendering. Defaults to a `pliron-inspect-driver` binary next to the current executable, if present. |
-| `--trace-dir <DIR>` | Mutable directory of imported trace files (`$STAIR_DISPLAY_TRACE_DIR`, then `~/.stair/traces`, then `.stair-traces`) |
+| `--trace-dir <DIR>` | Mutable directory of imported trace files (`$CRABBIT_DISPLAY_TRACE_DIR`, then `~/.crabbit/traces`, then `.crabbit-traces`) |
 | `--temp-trace-dir <DIR>` | Immutable directory where compiler runs write trace files |
 
 Building your own driver: implement `pliron_inspect_driver::DriverHooks` for your dialects/passes
@@ -73,7 +73,7 @@ cd ~/projects/montaglue/crabbit && cargo build -p crabbit-inspect-driver
 cd ~/projects/montaglue/pliron-inspect && cargo build -p pliron-inspect
 
 # 2. Get IR: any crabbit compile with CRABBIT_EMIT_IR=<dir> writes
-#    <crate>-stair_rust.plir next to nothing else you need.
+#    <crate>-crabbit_rust.plir next to nothing else you need.
 
 # 3. Start the analysis server (resident compiler):
 ~/projects/montaglue/crabbit/target/debug/crabbit-analysisd     --workers 4 --http 127.0.0.1:8177

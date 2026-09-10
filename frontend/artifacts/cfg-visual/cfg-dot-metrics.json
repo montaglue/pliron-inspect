@@ -1,7 +1,7 @@
 {
   "renderer": "Graphviz dot via @viz-js/viz",
-  "screenshotPath": "/Users/montaglue/projects/montaglue/stair/crates/stair-display/frontend/artifacts/cfg-visual/cfg-dot.png",
-  "metricsPath": "/Users/montaglue/projects/montaglue/stair/crates/stair-display/frontend/artifacts/cfg-visual/cfg-dot-metrics.json",
+  "screenshotPath": "/Users/montaglue/projects/montaglue/crabbit/crates/crabbit-display/frontend/artifacts/cfg-visual/cfg-dot.png",
+  "metricsPath": "/Users/montaglue/projects/montaglue/crabbit/crates/crabbit-display/frontend/artifacts/cfg-visual/cfg-dot-metrics.json",
   "nodeCount": 4,
   "edgeCount": 6,
   "intersections": [],

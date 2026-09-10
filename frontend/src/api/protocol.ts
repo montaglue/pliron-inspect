@@ -172,7 +172,7 @@ export type TreeNode = {
 };
 
 export type TextDocument = {
-  language: "stair-ir" | "plaintext" | string;
+  language: "crabbit-ir" | "plaintext" | string;
   text: string;
   spans?: TextSpan[];
 };

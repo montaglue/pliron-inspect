@@ -22,10 +22,10 @@ struct Args {
     #[arg(long)]
     driver: Option<String>,
 
-    /// Mutable directory containing imported .stx STAIR event log files.
+    /// Mutable directory containing imported .crt crabbit event log files.
     ///
-    /// Defaults to $STAIR_DISPLAY_TRACE_DIR, then ~/.stair/traces, then
-    /// .stair-traces. $STAIR_DISPLAY_TRACE_DIR may contain multiple directories
+    /// Defaults to $CRABBIT_DISPLAY_TRACE_DIR, then ~/.crabbit/traces, then
+    /// .crabbit-traces. $CRABBIT_DISPLAY_TRACE_DIR may contain multiple directories
     /// separated by ';'.
     #[arg(long)]
     trace_dir: Option<PathBuf>,
@@ -42,10 +42,10 @@ struct Args {
     #[arg(long)]
     frontend_dir: Option<PathBuf>,
 
-    /// Immutable temporary directory where compiler runs write .stx files.
+    /// Immutable temporary directory where compiler runs write .crt files.
     ///
-    /// Defaults to $STAIR_DISPLAY_TEMP_TRACE_DIR, then STAIR's default temp
-    /// trace directory. $STAIR_DISPLAY_TEMP_TRACE_DIR may contain multiple
+    /// Defaults to $CRABBIT_DISPLAY_TEMP_TRACE_DIR, then crabbit's default temp
+    /// trace directory. $CRABBIT_DISPLAY_TEMP_TRACE_DIR may contain multiple
     /// directories separated by ';'.
     #[arg(long)]
     temp_trace_dir: Option<PathBuf>,
@@ -56,12 +56,12 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let trace_library_dirs = dirs_from_cli_env_default(
         args.trace_dir,
-        "STAIR_DISPLAY_TRACE_DIR",
+        "CRABBIT_DISPLAY_TRACE_DIR",
         default_trace_library_dirs(),
     );
     let temp_trace_dirs = dirs_from_cli_env_default(
         args.temp_trace_dir,
-        "STAIR_DISPLAY_TEMP_TRACE_DIR",
+        "CRABBIT_DISPLAY_TEMP_TRACE_DIR",
         vec![PathBuf::from(pliron_inspect_protocol::trace::DEFAULT_TRACE_DIR)],
     );
     let state = AppState {
@@ -89,7 +89,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn default_trace_library_dir() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| home.join(".stair").join("traces"))
+    dirs::home_dir().map(|home| home.join(".crabbit").join("traces"))
 }
 
 fn dirs_from_cli_env_default(
@@ -111,7 +111,7 @@ fn dirs_from_cli_env_default(
 
 fn default_trace_library_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
-    dirs.push(default_trace_library_dir().unwrap_or_else(|| PathBuf::from(".stair-traces")));
+    dirs.push(default_trace_library_dir().unwrap_or_else(|| PathBuf::from(".crabbit-traces")));
     dirs.push(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")

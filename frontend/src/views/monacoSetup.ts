@@ -8,12 +8,12 @@ declare global {
 }
 
 let monacoConfigured = false;
-let stairLanguageRegistered = false;
+let crabbitLanguageRegistered = false;
 
-export function configureStairMonaco() {
+export function configureCrabbitMonaco() {
   configureWorker();
-  registerStairLanguage();
-  defineStairTheme();
+  registerCrabbitLanguage();
+  defineCrabbitTheme();
 }
 
 function configureWorker() {
@@ -26,16 +26,16 @@ function configureWorker() {
   monacoConfigured = true;
 }
 
-function registerStairLanguage() {
-  if (stairLanguageRegistered || monaco.languages.getLanguages().some((language) => language.id === "stair-ir")) {
-    stairLanguageRegistered = true;
+function registerCrabbitLanguage() {
+  if (crabbitLanguageRegistered || monaco.languages.getLanguages().some((language) => language.id === "crabbit-ir")) {
+    crabbitLanguageRegistered = true;
     return;
   }
 
-  monaco.languages.register({ id: "stair-ir" });
-  monaco.languages.setMonarchTokensProvider("stair-ir", {
+  monaco.languages.register({ id: "crabbit-ir" });
+  monaco.languages.setMonarchTokensProvider("crabbit-ir", {
     defaultToken: "",
-    tokenPostfix: ".stair",
+    tokenPostfix: ".crabbit",
     keywords: ["slt", "sle", "sgt", "sge", "eq", "ne", "ugt", "uge", "ult", "ule"],
     tokenizer: {
       root: [
@@ -67,27 +67,27 @@ function registerStairLanguage() {
       ]
     }
   });
-  stairLanguageRegistered = true;
+  crabbitLanguageRegistered = true;
 }
 
-function defineStairTheme() {
-  monaco.editor.defineTheme("stair-dark", {
+function defineCrabbitTheme() {
+  monaco.editor.defineTheme("crabbit-dark", {
     base: "vs-dark",
     inherit: true,
     rules: [
-      { token: "keyword.stair", foreground: "569cd6" },
-      { token: "keyword.control.stair", foreground: "c586c0" },
-      { token: "keyword.predicate.stair", foreground: "569cd6", fontStyle: "italic" },
-      { token: "type.stair", foreground: "4ec9b0" },
-      { token: "tag.stair", foreground: "c586c0" },
-      { token: "entity.name.function.stair", foreground: "dcdcaa" },
-      { token: "variable.stair", foreground: "9cdcfe" },
-      { token: "string.stair", foreground: "ce9178" },
-      { token: "number.stair", foreground: "b5cea8" },
-      { token: "comment.stair", foreground: "6a9955" },
-      { token: "operator.stair", foreground: "d4d4d4" },
-      { token: "delimiter.bracket.stair", foreground: "ffd700" },
-      { token: "delimiter.stair", foreground: "d4d4d4" }
+      { token: "keyword.crabbit", foreground: "569cd6" },
+      { token: "keyword.control.crabbit", foreground: "c586c0" },
+      { token: "keyword.predicate.crabbit", foreground: "569cd6", fontStyle: "italic" },
+      { token: "type.crabbit", foreground: "4ec9b0" },
+      { token: "tag.crabbit", foreground: "c586c0" },
+      { token: "entity.name.function.crabbit", foreground: "dcdcaa" },
+      { token: "variable.crabbit", foreground: "9cdcfe" },
+      { token: "string.crabbit", foreground: "ce9178" },
+      { token: "number.crabbit", foreground: "b5cea8" },
+      { token: "comment.crabbit", foreground: "6a9955" },
+      { token: "operator.crabbit", foreground: "d4d4d4" },
+      { token: "delimiter.bracket.crabbit", foreground: "ffd700" },
+      { token: "delimiter.crabbit", foreground: "d4d4d4" }
     ],
     colors: {}
   });

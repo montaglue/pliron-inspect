@@ -2,7 +2,7 @@
 //! (`cfg_render::discover_function_roots`).
 //!
 //! Not part of pliron core (proposed upstream, not yet merged — see
-//! MIGRATION-TO-PLIRON.md item #6 in the stair repo). Defined here, the one
+//! MIGRATION-TO-PLIRON.md item #6 in the crabbit repo). Defined here, the one
 //! place every driver already depends on, so any dialect crate wanting its
 //! ops picked up as CFG roots implements this trait directly rather than
 //! pliron-inspect depending on a specific dialect.

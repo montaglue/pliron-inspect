@@ -102,7 +102,7 @@ export function App() {
       snapshotId: activeTrace?.filepath ?? "none",
       rootId: activeView === "cfg" ? cfgRootId : undefined,
       text: snapshots[snapshotStep]?.ir ?? snapshots[snapshots.length - 1]?.ir ?? "",
-      options: { language: "stair-ir" }
+      options: { language: "crabbit-ir" }
     })
       .then((doc) => {
         setDocument(doc);
@@ -276,7 +276,7 @@ function TracePanel({
           ref={fileInputRef}
           className="trace-file-input"
           type="file"
-          accept=".stx"
+          accept=".crt"
           onChange={(event) => {
             const file = event.currentTarget.files?.[0];
             event.currentTarget.value = "";
@@ -289,7 +289,7 @@ function TracePanel({
             type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={loading}
-            title="Import .stx trace"
+            title="Import .crt trace"
           >
             <FolderPlusIcon />
           </button>
