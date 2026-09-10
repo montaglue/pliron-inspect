@@ -6,11 +6,13 @@
 pub mod cfg_render;
 pub mod function_like;
 pub mod harness;
+pub mod server;
 pub mod structural;
 pub mod tree_render;
 
 pub use function_like::FunctionLikeInterface;
-pub use harness::{DriverHooks, run_stdio_driver};
+pub use harness::{AttributionOps, DriverHooks, PipelineEvent, parse_ir, run_stdio_driver};
+pub use server::{HooksFactory, run_server_stdio};
 
 // ---- compatibility re-exports over the pliron core (cleanup pending) ----
 pub use pliron::{

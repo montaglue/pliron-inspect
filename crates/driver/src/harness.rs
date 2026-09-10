@@ -19,8 +19,32 @@ use crate::tree_render::{
     build_tree_render_document, diagnostic_document as tree_diagnostic_document,
 };
 
+/// One pipeline step's completion, as reported to [DriverHooks::run_pipeline]
+/// observers: index and name of the pass, wall time, and the IR after it
+/// when capture was requested.
+pub struct PipelineEvent {
+    pub index: usize,
+    pub name: String,
+    pub micros: u64,
+    pub ir: Option<String>,
+}
+
 /// What the embedding binary provides: a context with its dialects
 /// registered, and its pass pipeline.
+///
+/// The `run_stdio_driver` per-file commands use [Self::pass_names] /
+/// [Self::run_pass]; the resident server ([crate::server]) additionally
+/// uses the default-implemented pipeline/artifact methods below — drivers
+/// that don't override them simply don't support serving.
+/// See [DriverHooks::attribution_ops].
+#[derive(Debug, Clone, Default)]
+pub struct AttributionOps {
+    /// The printed IR at the boundary (lines referenced by `line`).
+    pub ir: String,
+    /// symbol → [(op id, 0-based line or None, snippet)]
+    pub functions: Vec<(String, Vec<(u32, Option<u32>, String)>)>,
+}
+
 pub trait DriverHooks {
     /// A fresh context. With derive-macro-defined entities this is usually
     /// just `Context::new()` (everything linked self-registers).
@@ -42,6 +66,77 @@ pub trait DriverHooks {
     ) -> Result<Ptr<Operation>, String> {
         Err(format!("unknown pass: {name}"))
     }
+
+    /// Targets the full pipeline can compile for (resident server only).
+    fn list_targets(&self) -> Vec<String> {
+        vec![]
+    }
+
+    /// The pass names of the full pipeline for `target` under `config`
+    /// (resident server only).
+    fn pipeline_pass_names(
+        &self,
+        _target: &str,
+        _config: &std::collections::BTreeMap<String, String>,
+    ) -> Result<Vec<String>, String> {
+        Err("pipeline runs are not supported by this driver".to_string())
+    }
+
+    /// Run the full pipeline for `target` under `config` on `root`,
+    /// calling `events` after every pass (with the printed IR when
+    /// `capture`). Stops cleanly after `upto` passes when set, or when
+    /// `events` returns false (cancellation).
+    #[allow(clippy::too_many_arguments)]
+    fn run_pipeline(
+        &self,
+        _ctx: &mut Context,
+        _root: Ptr<Operation>,
+        _target: &str,
+        _config: &std::collections::BTreeMap<String, String>,
+        _upto: Option<usize>,
+        _capture: bool,
+        _events: &mut dyn FnMut(PipelineEvent) -> bool,
+    ) -> Result<(), String> {
+        Err("pipeline runs are not supported by this driver".to_string())
+    }
+
+    /// The attribution op table at a named boundary pass of `target`'s
+    /// pipeline (crabbit docs/PROFILE-FEEDBACK-BACKWARD.md): replays the
+    /// pipeline over `module_text` up to and including `boundary_pass`,
+    /// with attribution stamping forced on, and returns the boundary IR
+    /// text plus, per function, the ops carrying an attribution id.
+    /// Default: unsupported.
+    fn attribution_ops(
+        &self,
+        _module_text: &str,
+        _target: &str,
+        _config: &std::collections::BTreeMap<String, String>,
+        _boundary_pass: &str,
+    ) -> Result<AttributionOps, String> {
+        Err("attribution is not supported by this driver".to_string())
+    }
+
+    /// The primary artifact for a module fully lowered by
+    /// [Self::run_pipeline] (object bytes, PTX text, …).
+    fn write_artifact(
+        &self,
+        _ctx: &mut Context,
+        _root: Ptr<Operation>,
+        _target: &str,
+    ) -> Result<Vec<u8>, String> {
+        Err("artifacts are not supported by this driver".to_string())
+    }
+
+    /// Named secondary artifacts (e.g. a block map) for a lowered module.
+    fn artifact_sidecars(
+        &self,
+        _ctx: &mut Context,
+        _root: Ptr<Operation>,
+        _target: &str,
+        _config: &std::collections::BTreeMap<String, String>,
+    ) -> Vec<(String, Vec<u8>)> {
+        vec![]
+    }
 }
 
 fn print_plain(ctx: &Context, op: Ptr<Operation>) -> String {
@@ -49,7 +144,7 @@ fn print_plain(ctx: &Context, op: Ptr<Operation>) -> String {
     op.print(ctx, &state).to_string()
 }
 
-fn parse_ir(content: &str, ctx: &mut Context) -> anyhow::Result<Ptr<Operation>> {
+pub fn parse_ir(content: &str, ctx: &mut Context) -> anyhow::Result<Ptr<Operation>> {
     let state = State::new(ctx, Source::InMemory);
     let stream = state_stream_from_iterator(content.chars(), state);
     let config = OperationParserConfig {
