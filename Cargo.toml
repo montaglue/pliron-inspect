@@ -14,6 +14,7 @@ pliron = "0.17.0"
 pliron-llvm = { version = "0.17.0", default-features = false }
 pliron-inspect-protocol = { version = "0.1.0", path = "crates/protocol" }
 pliron-inspect-driver = { version = "0.1.0", path = "crates/driver" }
+pliron-inspect-lsp = { version = "0.1.0", path = "crates/lsp" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"

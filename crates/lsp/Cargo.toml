@@ -1,0 +1,21 @@
+[package]
+name = "pliron-inspect-lsp"
+description = "Embeddable LSP server library for pliron textual IR (.plir); projects link it with their own dialect crates"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["pliron", "compiler", "ir", "lsp"]
+categories = ["compilers", "development-tools"]
+
+[dependencies]
+pliron.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+lsp-server = "0.7"
+lsp-types = "0.95"
+
+[dev-dependencies]
+pliron-llvm.workspace = true

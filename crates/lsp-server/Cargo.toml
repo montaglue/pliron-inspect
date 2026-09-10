@@ -1,0 +1,23 @@
+[package]
+name = "pliron-inspect-lsp-server"
+description = "Reference LSP server binary for pliron textual IR: the builtin + llvm dialect bundle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords = ["pliron", "compiler", "ir", "lsp"]
+categories = ["compilers", "development-tools"]
+
+[[bin]]
+name = "pliron-inspect-lsp-server"
+path = "src/main.rs"
+
+[dependencies]
+pliron.workspace = true
+pliron-llvm.workspace = true
+pliron-inspect-lsp.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

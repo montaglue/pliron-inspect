@@ -1,0 +1,93 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "pliron IR",
+  "scopeName": "source.plir",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#symbols" },
+    { "include": "#blocks" },
+    { "include": "#outlined" },
+    { "include": "#opnames" },
+    { "include": "#keywords" },
+    { "include": "#value-defs" },
+    { "include": "#numbers" },
+    { "include": "#type-words" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.plir",
+          "match": "//.*$"
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.plir",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.plir",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "symbols": {
+      "name": "entity.name.function.symbol.plir",
+      "match": "@[A-Za-z_][A-Za-z0-9_]*"
+    },
+    "blocks": {
+      "name": "entity.name.label.block.plir",
+      "match": "\\^[A-Za-z_][A-Za-z0-9_]*"
+    },
+    "outlined": {
+      "name": "entity.name.tag.outlined-attribute.plir",
+      "match": "#[A-Za-z_][A-Za-z0-9_]*"
+    },
+    "opnames": {
+      "comment": "dialect.op and dialect.type names",
+      "match": "\\b([A-Za-z_][A-Za-z0-9_]*)(\\.)([A-Za-z_][A-Za-z0-9_.]*)\\b",
+      "captures": {
+        "1": { "name": "entity.name.namespace.dialect.plir" },
+        "2": { "name": "punctuation.accessor.plir" },
+        "3": { "name": "support.function.op.plir" }
+      }
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.plir",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "keyword.other.plir",
+          "match": "\\b(variadic)\\b"
+        }
+      ]
+    },
+    "value-defs": {
+      "comment": "SSA result names on the left of `=`",
+      "match": "\\b([A-Za-z_][A-Za-z0-9_]*)(?=\\s*(?:,\\s*[A-Za-z_][A-Za-z0-9_]*\\s*)*=[^=])",
+      "name": "variable.other.definition.plir"
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.plir",
+          "match": "\\b0[xX][0-9a-fA-F]+\\b"
+        },
+        {
+          "name": "constant.numeric.plir",
+          "match": "\\b[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?\\b"
+        }
+      ]
+    },
+    "type-words": {
+      "comment": "shorthand integer/float type words like i64, u8, f32 after a type name",
+      "name": "storage.type.plir",
+      "match": "\\b(?:[iu][0-9]+|f16|f32|f64|si[0-9]+|ui[0-9]+)\\b"
+    }
+  }
+}

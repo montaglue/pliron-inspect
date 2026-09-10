@@ -1,0 +1,72 @@
+{
+  "name": "pliron-plir",
+  "displayName": "pliron IR (.plir)",
+  "description": "Language support for pliron textual IR, backed by a per-project pliron LSP server binary",
+  "version": "0.1.0",
+  "publisher": "pliron-inspect",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/montaglue/pliron-inspect"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "plir",
+        "aliases": [
+          "pliron IR",
+          "plir"
+        ],
+        "extensions": [
+          ".plir"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "plir",
+        "scopeName": "source.plir",
+        "path": "./syntaxes/plir.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "pliron.restartServer",
+        "title": "pliron: Restart LSP Server"
+      }
+    ],
+    "configuration": {
+      "title": "pliron IR",
+      "properties": {
+        "pliron.serverPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Absolute path to the pliron LSP server binary compiled with your project's dialects (e.g. `/path/to/myproject/target/debug/myproject-lsp`). `${workspaceFolder}` is substituted. When empty, the extension tries `${workspaceFolder}/target/debug/pliron-inspect-lsp-server` (the reference builtin+llvm bundle) and then `pliron-inspect-lsp-server` on PATH."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  }
+}

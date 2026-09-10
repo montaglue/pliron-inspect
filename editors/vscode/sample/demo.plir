@@ -1,0 +1,12 @@
+builtin.module @demo {
+^module_block():
+  llvm.func @sum_plus_seven: llvm.func <builtin.integer i64(builtin.integer i64, builtin.integer i64) variadic = false> [] {
+  ^entry(x: builtin.integer i64, y: builtin.integer i64):
+    three = builtin.constant <builtin.integer <3: i64>> : builtin.integer i64;
+    four = llvm.constant <builtin.integer <4: i64>> : builtin.integer i64;
+    seven = llvm.add three, four <{nsw=false,nuw=false}> : builtin.integer i64;
+    xy = llvm.add x, y <{nsw=false,nuw=false}> : builtin.integer i64;
+    total = llvm.add xy, seven <{nsw=false,nuw=false}> : builtin.integer i64;
+    llvm.return total
+  }
+}
