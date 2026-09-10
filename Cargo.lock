@@ -74,6 +74,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "arrayvec"
+version = "0.7.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
+
+[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -526,8 +532,6 @@ version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
 dependencies = [
- "allocator-api2",
- "equivalent",
  "foldhash 0.1.5",
 ]
 
@@ -536,6 +540,11 @@ name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+dependencies = [
+ "allocator-api2",
+ "equivalent",
+ "foldhash 0.2.0",
+]
 
 [[package]]
 name = "heck"
@@ -853,15 +862,17 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "pliron"
-version = "0.16.0"
-source = "git+https://github.com/pliron-org/pliron.git?rev=4750abfdc8823b30baffaf505ae7201a58522d34#4750abfdc8823b30baffaf505ae7201a58522d34"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e51eb8628227038376c81dcb1752db90a90af24a1e38b27582c7dab235149d7"
 dependencies = [
  "awint",
  "combine",
  "downcast-rs",
  "dyn-clone",
- "hashbrown 0.15.5",
+ "hashbrown 0.17.1",
  "hi_sparse_bitset",
+ "indexmap",
  "inventory",
  "linkme",
  "log",
@@ -871,17 +882,21 @@ dependencies = [
  "rustc-hash",
  "rustc_apfloat",
  "slotmap",
+ "smallvec",
  "spin",
  "thiserror",
+ "utf8-chars",
 ]
 
 [[package]]
 name = "pliron-derive"
-version = "0.16.0"
-source = "git+https://github.com/pliron-org/pliron.git?rev=4750abfdc8823b30baffaf505ae7201a58522d34#4750abfdc8823b30baffaf505ae7201a58522d34"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f878ccd6bfd39a9373175774b96785daab296dc1870bc72ff7d285151f613a56"
 dependencies = [
  "combine",
  "convert_case",
+ "indexmap",
  "proc-macro2",
  "quote",
  "rustc-hash",
@@ -928,8 +943,9 @@ dependencies = [
 
 [[package]]
 name = "pliron-llvm"
-version = "0.16.0"
-source = "git+https://github.com/pliron-org/pliron.git?rev=4750abfdc8823b30baffaf505ae7201a58522d34#4750abfdc8823b30baffaf505ae7201a58522d34"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "511535a077e4f72f83c437cde2636a6f525809a370b3078c0d1d5d53612ad052"
 dependencies = [
  "bitflags",
  "log",
@@ -1357,6 +1373,15 @@ name = "unicode-width"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
+
+[[package]]
+name = "utf8-chars"
+version = "3.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92498c67ea3511b37eccff13b573ed871faf0ce9c4056ab032bd01a681f445a0"
+dependencies = [
+ "arrayvec",
+]
 
 [[package]]
 name = "utf8parse"

@@ -10,8 +10,8 @@ repository = "https://github.com/montaglue/pliron-inspect"
 readme = "README.md"
 
 [workspace.dependencies]
-pliron = { version = "0.16.0", git = "https://github.com/pliron-org/pliron.git", rev = "222dd962a124cba8ec5f119ae6e0ecf202630854" }
-pliron-llvm = { version = "0.16.0", git = "https://github.com/pliron-org/pliron.git", rev = "222dd962a124cba8ec5f119ae6e0ecf202630854", default-features = false }
+pliron = "0.17.0"
+pliron-llvm = { version = "0.17.0", default-features = false }
 pliron-inspect-protocol = { version = "0.1.0", path = "crates/protocol" }
 pliron-inspect-driver = { version = "0.1.0", path = "crates/driver" }
 serde = { version = "1", features = ["derive"] }
