@@ -8,14 +8,14 @@
 use std::collections::{HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use pliron::builtin::attributes::IdentifierAttr;
+use pliron::builtin::attributes::{ATTR_KEY_GIVEN_NAMES, IdentifierAttr};
 use pliron::builtin::op_interfaces::ATTR_KEY_SYM_NAME;
 use pliron::common_traits::Named;
 use pliron::context::{Context, Ptr};
 use pliron::identifier::Identifier;
 use pliron::irfmt::parsers::spaced;
 use pliron::linked_list::ContainsLinkedList;
-use pliron::location::{Located, Location};
+use pliron::location::Location;
 use pliron::operation::{Operation, verify_operation};
 use pliron::parsable::parse_from_str;
 use pliron::printable::Printable;
@@ -363,7 +363,7 @@ fn collect_op(
     facts: &mut ModuleFacts,
     depth: usize,
 ) -> Option<DocumentSymbol> {
-    let loc = op.deref(ctx).loc();
+    let loc = op.deref(ctx).loc().clone();
     let line = loc_line0(&loc).unwrap_or(0);
     let start = src_pos_of(&loc)
         .map(|(l, c)| li.offset_of_src_pos(l, c, text))
@@ -399,7 +399,7 @@ fn collect_op(
         let opref = op.deref(ctx);
         for (key, attr) in opref.attributes.0.iter() {
             let key_s = key.to_string();
-            if key_s == "builtin_debug_info" {
+            if *key == ATTR_KEY_GIVEN_NAMES {
                 continue;
             }
             attrs.push(format!("{}: {}", key_s, attr.disp(ctx).to_string().trim()));
@@ -444,7 +444,7 @@ fn collect_op(
     for region in regions {
         let blocks: Vec<_> = region.deref(ctx).iter(ctx).collect();
         for block in blocks {
-            let bloc = block.deref(ctx).loc();
+            let bloc = block.deref(ctx).loc().clone();
             let bline = loc_line0(&bloc).unwrap_or(line);
             last_line = last_line.max(bline);
             let label = block.deref(ctx).given_name(ctx).map(|i| i.to_string());
@@ -492,7 +492,7 @@ fn collect_op(
             }
             let ops: Vec<_> = block.deref(ctx).iter(ctx).collect();
             for child in ops {
-                if let Some(cline) = loc_line0(&child.deref(ctx).loc()) {
+                if let Some(cline) = loc_line0(child.deref(ctx).loc()) {
                     last_line = last_line.max(cline);
                 }
                 if let Some(sym) = collect_op(ctx, child, li, text, facts, depth + 1) {
