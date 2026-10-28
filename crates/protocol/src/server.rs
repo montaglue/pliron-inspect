@@ -2,9 +2,19 @@
 //! (line-delimited JSON, same transport as the per-file driver commands).
 //!
 //! Command names: `server_health`, `list_targets`, `load_module`,
-//! `start_run`, `run_status`, `cancel_run`, `run_ir`, `run_artifact`.
-//! Progress is polled via `run_status` (the stdio transport is strict
-//! request/response; there are no unsolicited event lines).
+//! `start_run`, `run_status`, `cancel_run`, `run_ir`, `run_artifact`,
+//! `run_costs`, and the language queries `ir_hover`, `ir_definition`,
+//! `ir_references`, `ir_diagnostics`. Progress is polled via `run_status`
+//! (the stdio transport is strict request/response; there are no
+//! unsolicited event lines).
+//!
+//! The pliron-inspect UI server speaks the same commands to the opened
+//! project's analysis server and adds, for the UI only: `project_module`
+//! (`path` → the text of an emitted module under the project's trace
+//! directories), `run_costs` with `opCostsPath` instead of `opCosts` (a
+//! profile under those directories), and the `ir_*` queries answered by
+//! pliron-lsp, which add `location` (definitions in Rust source), `exact`
+//! and `engine`.
 
 use std::collections::BTreeMap;
 
@@ -186,8 +196,26 @@ pub struct IrHoverResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IrDefinitionResponse {
+    /// The definition inside the IR document.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub range: Option<DocRange>,
+    /// The definition outside it: the dialect's Rust source of an op, type
+    /// or attribute name (answered by the UI server through pliron-lsp when
+    /// a project is open; the analysis server never fills it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<SourceLocation>,
+}
+
+/// A position in a source file, with a few lines around it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceLocation {
+    pub path: String,
+    /// 0-based.
+    pub line: u32,
+    pub character: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snippet: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -225,6 +253,10 @@ pub struct IrDiagnosticsResponse {
     /// when false).
     pub parsed: bool,
     pub diagnostics: Vec<IrDiagnostic>,
+    /// With a project open in the UI: the state of its pliron-lsp dialect
+    /// engine (`building`, `ready`, ...), whose results these are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
 }
 
 pub fn base64_encode(bytes: &[u8]) -> String {

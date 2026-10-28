@@ -12,6 +12,7 @@ use axum::{
 };
 use pliron_inspect_protocol::trace::{self, TRACE_EXTENSION};
 
+use crate::analysis::Projects;
 use crate::driver;
 use pliron_inspect_protocol::types::*;
 
@@ -28,6 +29,32 @@ pub struct AppState {
     /// Directory holding the built frontend (index.html + assets);
     /// defaults to `<manifest dir>/frontend/dist`.
     pub frontend_dir: Option<PathBuf>,
+    /// The project opened from the UI, if any: its trace directories,
+    /// driver, analysis server and pliron-lsp take over the configured ones.
+    pub projects: std::sync::Arc<Projects>,
+}
+
+impl AppState {
+    /// Mutable trace directories: the opened project's, else the configured ones.
+    async fn library_dirs(&self) -> Vec<PathBuf> {
+        match self.projects.opened().await {
+            Some(o) => o.project.trace_dirs.clone(),
+            None => self.trace_library_dirs.clone(),
+        }
+    }
+
+    /// The render driver: the opened project's, else the configured one.
+    async fn driver(&self) -> Option<String> {
+        match self.projects.opened().await {
+            Some(o) => o
+                .project
+                .driver
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned())
+                .or_else(|| self.driver_binary.clone()),
+            None => self.driver_binary.clone(),
+        }
+    }
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -41,13 +68,18 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/render", post(render_document))
         .route("/api/analysis", post(analysis_proxy))
         .route("/api/analysis/health", get(analysis_health))
+        .route("/api/project", get(project_info))
+        .route("/api/project/open", post(project_open))
+        .route("/api/project/close", post(project_close))
+        .route("/analysis", get(serve_analysis_page))
         .route("/{*path}", get(serve_dist_asset))
         .layer(axum::extract::DefaultBodyLimit::max(256 * 1024 * 1024))
         .with_state(state)
 }
 
 async fn list_traces(State(state): State<AppState>) -> Response {
-    let library_projects = match discover_trace_projects(&state.trace_library_dirs) {
+    let library_dirs = state.library_dirs().await;
+    let library_projects = match discover_trace_projects(&library_dirs) {
         Ok(projects) => projects,
         Err(error) => return error_response(error),
     };
@@ -59,7 +91,7 @@ async fn list_traces(State(state): State<AppState>) -> Response {
     Json(TraceListResponse {
         library_projects,
         temp_projects,
-        library_dirs: display_dirs(&state.trace_library_dirs),
+        library_dirs: display_dirs(&library_dirs),
         temp_dirs: display_dirs(&state.temp_trace_dirs),
     })
     .into_response()
@@ -87,7 +119,8 @@ async fn open_trace(State(state): State<AppState>, Json(req): Json<OpenTraceRequ
 
     let imported_from = if is_inside_any_dir(&path, &state.temp_trace_dirs) {
         let source = path.clone();
-        match import_temp_trace(&state, &source) {
+        let library_dirs = state.library_dirs().await;
+        match import_temp_trace(&library_dirs, &state.temp_trace_dirs, &source) {
             Ok(imported) => {
                 path = imported;
                 Some(source.to_string_lossy().to_string())
@@ -131,7 +164,8 @@ async fn import_trace(
         }
     };
 
-    let Some(trace_library_dir) = state.trace_library_dirs.first() else {
+    let library_dirs = state.library_dirs().await;
+    let Some(trace_library_dir) = library_dirs.first() else {
         return error_response(anyhow::anyhow!(
             "no trace library directories are configured"
         ));
@@ -198,8 +232,57 @@ fn trace_response(
 async fn health(State(state): State<AppState>) -> impl IntoResponse {
     Json(HealthResponse {
         ok: true,
-        driver_binary: state.driver_binary,
+        driver_binary: state.driver().await,
     })
+}
+
+/// The compiled-in analysis page (always, even when a built frontend is
+/// served at `/`).
+async fn serve_analysis_page() -> Response {
+    Html(include_str!("static/index.html").to_string()).into_response()
+}
+
+async fn project_info(State(state): State<AppState>) -> Response {
+    Json(state.projects.info().await).into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct OpenProjectRequest {
+    root: String,
+}
+
+/// Open the project at `root` (a cargo workspace or package): discover its
+/// trace directories, driver and analysis server (built if needed), start
+/// the analysis server and pliron-lsp on it. Asynchronous: `/api/project`
+/// reports the state.
+async fn project_open(
+    State(state): State<AppState>,
+    Json(req): Json<OpenProjectRequest>,
+) -> Response {
+    let root = PathBuf::from(shellexpand_home(&req.root));
+    if !root.is_dir() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": format!("{} is not a directory", root.display()) })),
+        )
+            .into_response();
+    }
+    state.projects.open(root).await;
+    Json(state.projects.info().await).into_response()
+}
+
+async fn project_close(State(state): State<AppState>) -> Response {
+    state.projects.close().await;
+    Json(state.projects.info().await).into_response()
+}
+
+fn shellexpand_home(path: &str) -> String {
+    match path.strip_prefix("~/") {
+        Some(rest) => dirs::home_dir()
+            .map(|h| h.join(rest).to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.to_string()),
+        None => path.to_string(),
+    }
 }
 
 async fn capabilities() -> impl IntoResponse {
@@ -267,7 +350,7 @@ async fn render_document(
             }),
             diagnostics: vec![],
         },
-        "cfg" | "tree" => match state.driver_binary.as_deref() {
+        "cfg" | "tree" => match state.driver().await.as_deref() {
             Some(driver_binary) => {
                 req.snapshot_id = Some(snapshot_id.clone());
                 match driver::render_document(driver_binary, &req).await {
@@ -334,18 +417,22 @@ fn diagnostic_document(
     }
 }
 
-/// Forward one server-protocol command object to the analysis server's
-/// HTTP shim and return its JSON verbatim. The whole analysis API is this
-/// single generic route: the frontend speaks the same wire commands as
-/// stdio/curl clients.
+/// One server-protocol command object, answered as JSON. The whole
+/// analysis API is this single generic route: the frontend speaks the same
+/// wire commands as stdio/curl clients. With a project open, the command
+/// goes to the project's analysis server (or, for the `ir_*` language
+/// queries, to pliron-lsp); otherwise to the configured `--server` shim.
 async fn analysis_proxy(
     State(state): State<AppState>,
     Json(cmd): Json<serde_json::Value>,
 ) -> Response {
+    if let Some(value) = state.projects.handle(&cmd).await {
+        return Json(value).into_response();
+    }
     let Some(addr) = state.analysis_server.clone() else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({"error": "no analysis server configured; start crabbit-analysisd --http 127.0.0.1:PORT and pass --server 127.0.0.1:PORT"})),
+            Json(serde_json::json!({"error": "no project is open and no analysis server is configured; open a project in the UI, or start crabbit-analysisd --http 127.0.0.1:PORT and pass --server 127.0.0.1:PORT"})),
         )
             .into_response();
     };
@@ -491,12 +578,15 @@ fn is_inside_dir(path: &Path, dir: &Path) -> bool {
     path.starts_with(dir)
 }
 
-fn import_temp_trace(state: &AppState, source: &Path) -> anyhow::Result<PathBuf> {
-    let trace_library_dir = state
-        .trace_library_dirs
+fn import_temp_trace(
+    library_dirs: &[PathBuf],
+    temp_dirs: &[PathBuf],
+    source: &Path,
+) -> anyhow::Result<PathBuf> {
+    let trace_library_dir = library_dirs
         .first()
         .ok_or_else(|| anyhow::anyhow!("no trace library directories are configured"))?;
-    let project_dir = trace_library_dir.join(project_for_source(source, &state.temp_trace_dirs));
+    let project_dir = trace_library_dir.join(project_for_source(source, temp_dirs));
     std::fs::create_dir_all(&project_dir)?;
     let filename = source
         .file_name()

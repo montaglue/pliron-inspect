@@ -19,15 +19,33 @@ textarea { width:100%; box-sizing:border-box; background:#22272e; color:#e5e7eb;
 #irview .hl { background:#3b2f00; outline:1px solid #7a6400; }
 #irview .refhl { background:#0e3a2f; }
 .badge { display:inline-block; border-radius:10px; padding:1px 8px; font-size:11px; margin-left:6px; background:#2d333b; }
-.ok { color:#7ee787; } .bad { color:#ff7b72; } .muted { color:#8b949e; }
-#hoverbox { position:fixed; display:none; background:#22272e; border:1px solid #58a6ff; border-radius:6px; padding:6px 10px; font-size:12px; max-width:480px; white-space:pre-wrap; z-index:10; }
+.ok { color:#7ee787; } .bad { color:#ff7b72; } .muted { color:#8b949e; } .warn { color:#e3b341; }
+#hoverbox { position:fixed; display:none; background:#22272e; border:1px solid #58a6ff; border-radius:6px; padding:6px 10px; font-size:12px; max-width:560px; max-height:50vh; overflow:auto; white-space:pre-wrap; z-index:10; }
+#defbox { display:none; font-family:ui-monospace,monospace; font-size:12px; white-space:pre; background:#111318; border:1px solid #30363d; border-radius:6px; padding:8px; margin-top:6px; overflow:auto; }
 table { border-collapse:collapse; font-size:12px; } td,th { border:1px solid #30363d; padding:2px 8px; text-align:left; }
 .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin:6px 0; }
 label { font-size:12px; color:#aeb6c2; }
+code { font-family:ui-monospace,monospace; font-size:12px; }
 </style>
 </head>
 <body>
-<h1>pliron-inspect <span id="connbadge" class="badge muted">analysis server: checking…</span></h1>
+<h1>pliron-inspect <span id="projbadge" class="badge muted">no project</span> <span id="connbadge" class="badge muted">analysis server: checking…</span></h1>
+
+<section id="projsec">
+<h2>Project</h2>
+<div class="row">
+  <input type="text" id="projroot" size="60" placeholder="/path/to/your/project (a cargo workspace with pliron dialects)">
+  <button id="openbtn">Open project</button>
+  <button id="closebtn">Close</button>
+  <span id="projstatus" class="muted"></span>
+</div>
+<div id="projdetail" class="muted" style="font-size:12px"></div>
+<div class="row" id="projrow" style="display:none">
+  <label>emitted modules <select id="modsel"></select></label>
+  <button id="openmodbtn">Load into Module</button>
+  <label>profiles <select id="profsel"></select></label>
+</div>
+</section>
 
 <section id="modsec">
 <h2>Module</h2>
@@ -35,6 +53,7 @@ label { font-size:12px; color:#aeb6c2; }
   <input type="text" id="modname" value="module" size="12">
   <input type="file" id="modfile">
   <button id="loadbtn">Load module</button>
+  <button id="showmodbtn">Show module IR</button>
   <span id="modstatus" class="muted"></span>
 </div>
 <textarea id="modtext" rows="6" placeholder="…or paste printed IR (.plir) here"></textarea>
@@ -53,6 +72,7 @@ label { font-size:12px; color:#aeb6c2; }
   <button id="runbtn">Start run</button>
 </div>
 <table id="runs"><tr><th>run</th><th>target</th><th>config</th><th>status</th><th>progress</th><th></th></tr></table>
+<div id="costs"></div>
 </section>
 
 <section>
@@ -61,22 +81,68 @@ label { font-size:12px; color:#aeb6c2; }
   <label>pass <select id="passsel"></select></label>
   <button id="irbtn">Show IR</button>
   <button id="diagbtn">Diagnostics</button>
-  <span class="muted">click a token: hover info · <b>d</b>: go to definition · <b>r</b>: references</span>
+  <span class="muted">click a token: hover info · <b>d</b>: go to definition (into the dialect's Rust source for op/type names) · <b>r</b>: references</span>
 </div>
 <div id="diags"></div>
 <div id="irview" tabindex="0"></div>
+<div id="defbox"></div>
 </section>
 <div id="hoverbox"></div>
 
 <script>
 const $ = id => document.getElementById(id);
-let currentRun = null, currentPass = null, runPasses = {}, lastPos = null;
+let currentRun = null, currentPass = null, runPasses = {}, lastPos = null, moduleId = null;
+let projectReady = false;
 
 async function api(cmd) {
   const r = await fetch('/api/analysis', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(cmd)});
   return r.json();
 }
+async function getJson(url, init) { const r = await fetch(url, init); return r.json(); }
 
+// ---- project --------------------------------------------------------------
+function esc(s) { return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+async function refreshProject() {
+  const p = await getJson('/api/project');
+  const badge = $('projbadge'), status = $('projstatus'), detail = $('projdetail');
+  projectReady = p.state === 'ready';
+  $('projrow').style.display = projectReady ? '' : 'none';
+  if (p.state === 'none') { badge.textContent = 'no project'; badge.className = 'badge muted'; status.textContent = ''; detail.textContent = ''; return; }
+  if (p.state === 'opening') { badge.textContent = 'opening project…'; badge.className = 'badge warn'; status.textContent = `opening ${p.root} (building its binaries if needed)`; setTimeout(refreshProject, 1000); return; }
+  if (p.state === 'error') { badge.textContent = 'project error'; badge.className = 'badge bad'; status.textContent = p.message; status.className = 'bad'; return; }
+  const root = p.root.split('/').pop();
+  const lsp = p.lsp || {};
+  const st = lsp.status ? lsp.status.state : 'none';
+  badge.textContent = `project: ${root}`; badge.className = 'badge ok';
+  status.className = 'muted';
+  status.textContent = lsp.error ? `pliron-lsp: ${lsp.error}` : `dialect engine: ${st}${lsp.status && lsp.status.message ? ' — ' + lsp.status.message : ''}`;
+  if (st === 'building' || st === 'starting') { status.className = 'warn'; setTimeout(refreshProject, 1500); }
+  else if (st === 'error') status.className = 'bad';
+  detail.innerHTML = `root <code>${esc(p.root)}</code> · traces ${(p.traceDirs||[]).map(d => '<code>'+esc(d)+'</code>').join(', ')}`
+    + ` · driver ${p.driver ? '<code>'+esc(p.driver)+'</code>' : '<span class="bad">none</span>'}`
+    + ` · analysis server ${p.analysisd ? '<code>'+esc(p.analysisd)+'</code>' : '<span class="bad">none</span>'}`
+    + (lsp.path ? ` · pliron-lsp <code>${esc(lsp.path)}</code>` : '');
+  const fill = (sel, items) => { sel.innerHTML = ''; for (const m of items) { const o = document.createElement('option'); o.value = m; o.textContent = m.replace(p.root + '/', ''); sel.append(o); } };
+  fill($('modsel'), p.modules || []); fill($('profsel'), p.profiles || []);
+  refreshConn();
+}
+$('openbtn').onclick = async () => {
+  const root = $('projroot').value.trim(); if (!root) return;
+  const r = await getJson('/api/project/open', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({root})});
+  if (r.error) { $('projstatus').textContent = r.error; $('projstatus').className = 'bad'; return; }
+  try { localStorage.setItem('pliron-inspect.project', root); } catch (e) {}
+  refreshProject();
+};
+$('closebtn').onclick = async () => { await getJson('/api/project/close', {method:'POST'}); refreshProject(); };
+$('openmodbtn').onclick = async () => {
+  const path = $('modsel').value; if (!path) return;
+  const m = await api({cmd:'project_module', path});
+  if (m.error) { alert(m.error); return; }
+  $('modtext').value = m.text; $('modname').value = m.name || 'module';
+};
+
+// ---- analysis server --------------------------------------------------------
 async function refreshConn() {
   try {
     const h = await api({cmd:'server_health'});
@@ -88,6 +154,7 @@ async function refreshConn() {
 
 async function loadTargets() {
   const t = await api({cmd:'list_targets'});
+  $('target').innerHTML = '';
   for (const name of (t.targets||[])) { const o = document.createElement('option'); o.textContent = name; $('target').append(o); }
 }
 
@@ -97,12 +164,17 @@ $('modfile').onchange = async () => {
   if ($('modname').value === 'module') $('modname').value = f.name.replace(/\.plir$/,'');
 };
 
-let moduleId = null;
 $('loadbtn').onclick = async () => {
   const resp = await api({cmd:'load_module', name:$('modname').value, text:$('modtext').value});
   if (resp.error) { $('modstatus').textContent = resp.error; $('modstatus').className='bad'; return; }
   moduleId = resp.moduleId;
   $('modstatus').textContent = `loaded as module ${moduleId}`; $('modstatus').className='ok';
+};
+$('showmodbtn').onclick = () => {
+  if (moduleId === null) { alert('load a module first'); return; }
+  currentRun = null; currentPass = null;
+  renderIr($('modtext').value);
+  $('irmeta').textContent = `(module ${moduleId})`;
 };
 
 function config() {
@@ -117,6 +189,7 @@ function config() {
 
 $('runbtn').onclick = async () => {
   if (moduleId === null) { alert('load a module first'); return; }
+  if (!$('target').value) await loadTargets();
   const resp = await api({cmd:'start_run', moduleId, target:$('target').value, config:config(), inspect:$('cfg_inspect').checked});
   if (resp.error) { alert(resp.error); return; }
   runPasses[resp.runId] = resp.passes;
@@ -127,7 +200,7 @@ $('runbtn').onclick = async () => {
 function addRunRow(id, target, cfg) {
   const tr = document.createElement('tr'); tr.id = 'run'+id;
   tr.innerHTML = `<td>${id}</td><td>${target}</td><td>${cfg}</td><td class="st">queued</td><td class="pg"></td>
-    <td><button onclick="selectRun(${id})">inspect</button> <button onclick="cancelRun(${id})">cancel</button> <button onclick="artifact(${id})">artifact</button></td>`;
+    <td><button onclick="selectRun(${id})">inspect</button> <button onclick="cancelRun(${id})">cancel</button> <button onclick="artifact(${id})">artifact</button> <button onclick="costs(${id})">costs</button></td>`;
   $('runs').append(tr);
 }
 
@@ -147,6 +220,22 @@ window.artifact = async id => {
   dl(`run${id}.artifact`, resp.artifactBase64);
   for (const s of resp.sidecars||[]) dl(`run${id}.${s.name}`, s.base64);
 };
+// The backward cost lift of a profile found in the project (op_costs.json).
+window.costs = async id => {
+  const profile = $('profsel').value;
+  if (!profile) { alert('no profile (op_costs.json) found under the project\'s trace directories'); return; }
+  const resp = await api({cmd:'run_costs', runId:id, opCostsPath:profile});
+  if (resp.error) { $('costs').innerHTML = `<span class="bad">${esc(resp.error)}</span>`; return; }
+  let html = `<div class="muted">costs of run ${id} at level ${esc(resp.level)} from ${esc(profile)}</div>`;
+  for (const f of resp.functions || []) {
+    const roots = Object.entries(f.roots || {}).map(([k, v]) => `${k}: ${v}`).join(', ');
+    html += `<div><b>${esc(f.symbol)}</b> <span class="muted">${esc(roots)}</span></div><table><tr><th>op id</th><th>cost</th><th>line</th><th>op</th></tr>`
+      + (f.entries || []).slice(0, 25).map(e => `<tr><td>${esc(e.id)}</td><td>${e.cost}</td><td>${e.line == null ? '' : e.line + 1}</td><td><code>${esc(e.snippet)}</code></td></tr>`).join('') + '</table>';
+    const un = Object.keys(f.unmatched || {}).length;
+    if (un) html += `<div class="warn">${un} profiled ids have no op at this boundary</div>`;
+  }
+  $('costs').innerHTML = html;
+};
 
 async function pollRun(id) {
   const st = await api({cmd:'run_status', runId:id});
@@ -156,8 +245,11 @@ async function pollRun(id) {
   if (st.status === 'queued' || st.status === 'running') setTimeout(() => pollRun(id), 400);
 }
 
+// The document the IR view shows: a run's IR at a pass, or the module.
+function docRef() { return currentRun !== null ? {runId:currentRun, pass:currentPass} : {moduleId}; }
+
 $('irbtn').onclick = async () => {
-  if (currentRun === null) { alert('select a run (inspect)'); return; }
+  if (currentRun === null) { alert('select a run (inspect), or Show module IR'); return; }
   currentPass = parseInt($('passsel').value);
   const resp = await api({cmd:'run_ir', runId:currentRun, pass:currentPass});
   if (resp.error) { alert(resp.error); return; }
@@ -166,7 +258,7 @@ $('irbtn').onclick = async () => {
 };
 
 function renderIr(text) {
-  const view = $('irview'); view.innerHTML = '';
+  const view = $('irview'); view.innerHTML = ''; $('defbox').style.display = 'none';
   text.split('\n').forEach((line, i) => {
     const span = document.createElement('span');
     span.className = 'line'; span.dataset.line = i; span.textContent = line || ' ';
@@ -187,23 +279,31 @@ function posFromClick(ev) {
   return { line: parseInt(lineEl.dataset.line), character };
 }
 
+function haveDoc() { return currentRun !== null || moduleId !== null; }
+
 $('irview').onclick = async ev => {
-  const pos = posFromClick(ev); if (!pos) return; lastPos = pos;
-  const resp = await api({cmd:'ir_hover', runId:currentRun, pass:currentPass, position:pos});
+  const pos = posFromClick(ev); if (!pos || !haveDoc()) return; lastPos = pos;
+  const resp = await api({cmd:'ir_hover', ...docRef(), position:pos});
   const box = $('hoverbox');
   if (resp.contents) {
-    box.textContent = resp.contents; box.style.display = 'block';
-    box.style.left = Math.min(ev.clientX+8, innerWidth-500)+'px'; box.style.top = (ev.clientY+12)+'px';
-    highlight([resp.range], 'hl');
+    box.textContent = resp.contents + (resp.exact === false ? '\n\n(syntax layer; the dialect engine is not ready yet)' : '');
+    box.style.display = 'block';
+    box.style.left = Math.min(ev.clientX+8, innerWidth-580)+'px'; box.style.top = (ev.clientY+12)+'px';
+    highlight(resp.range ? [resp.range] : [], 'hl');
   } else { box.style.display = 'none'; highlight([], 'hl'); }
 };
 document.addEventListener('keydown', async ev => {
-  if (!lastPos || currentRun === null) return;
+  if (!lastPos || !haveDoc()) return;
   if (ev.key === 'd') {
-    const resp = await api({cmd:'ir_definition', runId:currentRun, pass:currentPass, position:lastPos});
-    if (resp.range) { highlight([resp.range], 'hl'); scrollToLine(resp.range.start.line); }
+    const resp = await api({cmd:'ir_definition', ...docRef(), position:lastPos});
+    if (resp.range) { highlight([resp.range], 'hl'); scrollToLine(resp.range.start.line); $('defbox').style.display = 'none'; }
+    else if (resp.location) {
+      const l = resp.location;
+      $('defbox').textContent = `defined in ${l.path}:${l.line + 1}:${l.character + 1}\n\n${l.snippet || ''}`;
+      $('defbox').style.display = 'block';
+    }
   } else if (ev.key === 'r') {
-    const resp = await api({cmd:'ir_references', runId:currentRun, pass:currentPass, position:lastPos});
+    const resp = await api({cmd:'ir_references', ...docRef(), position:lastPos});
     highlight(resp.ranges||[], 'refhl');
     if ((resp.ranges||[]).length) scrollToLine(resp.ranges[0].start.line);
   }
@@ -215,14 +315,20 @@ function highlight(ranges, cls) {
 }
 
 $('diagbtn').onclick = async () => {
-  if (currentRun === null) return;
-  const resp = await api({cmd:'ir_diagnostics', runId:currentRun, pass:currentPass});
+  if (!haveDoc()) return;
+  const resp = await api({cmd:'ir_diagnostics', ...docRef()});
   if (resp.error) { $('diags').textContent = resp.error; return; }
   $('diags').innerHTML = `<span class="${resp.parsed ? 'ok':'bad'}">parsed: ${resp.parsed}</span>` +
-    (resp.diagnostics||[]).map(d => `<div class="bad">L${d.range.start.line+1}: [${d.severity}] ${d.message.split('\n')[0]}</div>`).join('');
+    (resp.engine ? ` <span class="muted">(engine: ${esc(resp.engine)}${resp.exact === false ? ', syntax layer only' : ''})</span>` : '') +
+    (resp.diagnostics||[]).map(d => `<div class="${d.severity === 'error' ? 'bad' : 'warn'}">L${d.range.start.line+1}: [${esc(d.severity)}${d.source ? ' ' + esc(d.source) : ''}] ${esc(d.message.split('\n')[0])}</div>`).join('');
 };
 
-(async () => { if (await refreshConn()) await loadTargets(); setInterval(refreshConn, 5000); })();
+(async () => {
+  try { const last = localStorage.getItem('pliron-inspect.project'); if (last) $('projroot').value = last; } catch (e) {}
+  await refreshProject();
+  if (await refreshConn()) await loadTargets();
+  setInterval(refreshConn, 5000);
+})();
 </script>
 </body>
 </html>

@@ -1,4 +1,8 @@
+mod analysis;
+mod analysisd;
 mod driver;
+mod lsp;
+mod project;
 mod server;
 
 use clap::Parser as ClapParser;
@@ -42,6 +46,11 @@ struct Args {
     #[arg(long)]
     frontend_dir: Option<PathBuf>,
 
+    /// Worker threads of a project's analysis server (started when a
+    /// project is opened in the UI).
+    #[arg(long, default_value_t = 4)]
+    workers: usize,
+
     /// Immutable temporary directory where compiler runs write .crt files.
     ///
     /// Defaults to $CRABBIT_DISPLAY_TEMP_TRACE_DIR, then crabbit's default temp
@@ -70,6 +79,7 @@ async fn main() -> anyhow::Result<()> {
         temp_trace_dirs,
         analysis_server: args.server,
         frontend_dir: args.frontend_dir,
+        projects: analysis::Projects::new(args.workers),
     };
 
     let app = build_router(state);
@@ -81,7 +91,10 @@ async fn main() -> anyhow::Result<()> {
         let _ = open::that(&url);
     }
 
-    eprintln!("Server listening on http://{}", addr);
+    eprintln!(
+        "Server listening on http://{} (analysis + project panels: http://{}/analysis)",
+        addr, addr
+    );
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
 

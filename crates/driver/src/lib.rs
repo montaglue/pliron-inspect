@@ -6,6 +6,7 @@
 pub mod cfg_render;
 pub mod function_like;
 pub mod harness;
+pub mod language;
 pub mod server;
 pub mod structural;
 pub mod tree_render;

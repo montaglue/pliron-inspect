@@ -14,11 +14,11 @@ use std::io::{BufRead, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 
-use pliron_inspect_lsp::DocumentAnalysis;
 use pliron_inspect_protocol::server as wire;
 use serde_json::{Value, json};
 
 use crate::harness::{AttributionOps, DriverHooks, PipelineEvent, parse_ir};
+use crate::language::{Document, Severity};
 
 /// Builds a fresh [DriverHooks] per worker/request thread (the hooks
 /// themselves need not be `Send`).
@@ -62,7 +62,7 @@ pub struct Server {
     /// Language-feature analyses keyed by IR document identity
     /// (`module:<id>` / `run:<id>:<pass>`); both underlying texts are
     /// immutable, so entries never go stale. Bounded (cleared when full).
-    analyses: Mutex<HashMap<String, Arc<DocumentAnalysis>>>,
+    analyses: Mutex<HashMap<String, Arc<Document>>>,
 }
 
 impl Server {
@@ -534,7 +534,7 @@ impl Server {
         run_id: Option<u64>,
         module_id: Option<u64>,
         pass: Option<usize>,
-    ) -> Result<Arc<DocumentAnalysis>, String> {
+    ) -> Result<Arc<Document>, String> {
         let (key, text) = match (run_id, module_id) {
             (Some(run_id), _) => {
                 let (text, target, config, captured, done_passes) = {
@@ -598,7 +598,9 @@ impl Server {
             }
             (None, None) => return Err("ir query requires runId or moduleId".to_string()),
         };
-        let analysis = Arc::new(DocumentAnalysis::new(text));
+        let hooks = (self.factory)();
+        let mut ctx = hooks.create_context();
+        let analysis = Arc::new(Document::analyze(text, &mut ctx));
         let mut cache = self.analyses.lock().unwrap_or_else(|e| e.into_inner());
         if cache.len() >= 16 {
             cache.clear();
@@ -612,27 +614,21 @@ impl Server {
             Ok(a) => a,
             Err(e) => return error(&e),
         };
-        let pos = lsp_types::Position {
-            line: req.position.line,
-            character: req.position.character,
-        };
+        let pos = req.position;
         match cmd {
             "ir_hover" => {
                 let (range, contents) = match analysis.hover(pos) {
-                    Some((range, value)) => (Some(to_doc_range(range)), Some(value)),
+                    Some((range, value)) => (Some(range), Some(value)),
                     None => (None, None),
                 };
                 to_value(wire::IrHoverResponse { contents, range })
             }
             "ir_definition" => to_value(wire::IrDefinitionResponse {
-                range: analysis.definition(pos).map(to_doc_range),
+                range: analysis.definition(pos),
+                location: None,
             }),
             "ir_references" => to_value(wire::IrReferencesResponse {
-                ranges: analysis
-                    .references(pos, req.include_declaration)
-                    .into_iter()
-                    .map(to_doc_range)
-                    .collect(),
+                ranges: analysis.references(pos, req.include_declaration),
             }),
             _ => error("unreachable ir query"),
         }
@@ -649,18 +645,18 @@ impl Server {
                 .diagnostics
                 .iter()
                 .map(|d| wire::IrDiagnostic {
-                    range: to_doc_range(d.range),
+                    range: d.range,
                     severity: match d.severity {
-                        Some(lsp_types::DiagnosticSeverity::WARNING) => "warning",
-                        Some(lsp_types::DiagnosticSeverity::INFORMATION) => "info",
-                        Some(lsp_types::DiagnosticSeverity::HINT) => "hint",
-                        _ => "error",
+                        Severity::Error => "error",
+                        Severity::Warning => "warning",
+                        Severity::Info => "info",
                     }
                     .to_string(),
-                    source: d.source.clone(),
+                    source: Some(d.source.to_string()),
                     message: d.message.clone(),
                 })
                 .collect(),
+            engine: None,
         })
     }
 
@@ -687,19 +683,6 @@ impl Server {
                 })
                 .collect(),
         })
-    }
-}
-
-fn to_doc_range(range: lsp_types::Range) -> wire::DocRange {
-    wire::DocRange {
-        start: wire::DocPosition {
-            line: range.start.line,
-            character: range.start.character,
-        },
-        end: wire::DocPosition {
-            line: range.end.line,
-            character: range.end.character,
-        },
     }
 }
 

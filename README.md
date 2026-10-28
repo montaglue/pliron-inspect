@@ -46,7 +46,8 @@ cargo build --workspace
 cargo run -p pliron-inspect
 ```
 
-This opens a browser at `http://127.0.0.1:3000` by default. Useful flags:
+This opens a browser at `http://127.0.0.1:3000` by default; the analysis and project
+panels are at `http://127.0.0.1:3000/analysis`. Useful flags:
 
 | Flag | Description |
 |------|-------------|
@@ -65,30 +66,49 @@ Apache-2.0, see [LICENSE](LICENSE). Built on top of [pliron](https://github.com/
 also Apache-2.0.
 
 
-## Quickstart: analysis server + UI (crabbit)
+## Quickstart: open a project (crabbit)
 
 ```sh
-# 1. Build (crabbit repo): the analysis server; (this repo): the UI.
-cd ~/projects/montaglue/crabbit && cargo build -p crabbit-inspect-driver
-cd ~/projects/montaglue/pliron-inspect && cargo build -p pliron-inspect
-
-# 2. Get IR: any crabbit compile with CRABBIT_EMIT_IR=<dir> writes
-#    <crate>-crabbit_rust.plir next to nothing else you need.
-
-# 3. Start the analysis server (resident compiler):
-~/projects/montaglue/crabbit/target/debug/crabbit-analysisd     --workers 4 --http 127.0.0.1:8177
-
-# 4. Start the UI pointed at it (opens the browser):
-target/debug/pliron-inspect --port 3000 --server 127.0.0.1:8177
+# The language server, from its own repository (once).
+cargo install --locked --git https://github.com/montaglue/pliron-lsp pliron-lsp pliron-lsp-engine-ref
+# The UI.
+cargo build -p pliron-inspect
+target/debug/pliron-inspect            # opens the browser
 ```
 
-In the browser: paste or file-pick the `.plir` → **Load module** → choose
-target/config axes → **Start run** → watch per-pass progress → **inspect**
-on the run row → pick a pass → **Show IR**. In the IR view, click a token
-for hover info, then press **d** (go to definition) or **r** (highlight
-references); **Diagnostics** shows parse/verify state; **artifact**
-downloads the object plus sidecars. `--frontend-dir DIR` serves a built
-frontend from DIR instead of the checkout default.
+Open `http://127.0.0.1:3000/analysis` and enter the project root (for crabbit,
+its checkout) under **Project → Open project**. From the root the server
+derives everything:
+
+- **Binaries.** `[workspace.metadata.pliron-inspect]` in the project's
+  `Cargo.toml` names its render driver and resident analysis server
+  (`crabbit-inspect-driver`, `crabbit-analysisd`); they are taken from the
+  project's `target/`, built there with `cargo build --bin` when missing,
+  and the analysis server is started on stdio.
+- **Traces, modules, profiles.** `<root>/.crabbit-traces` (or the `traces`
+  dirs of the metadata) is the trace library; `.plir` modules found there
+  are offered under **emitted modules**, `op_costs.json` profiles under
+  **profiles** (the **costs** button of a run lifts one onto the run's IR).
+  crabbit writes there with `CRABBIT_TRACE=1` and `CRABBIT_EMIT_IR=1`.
+- **Dialect sources.** pliron-lsp is started on the root; it builds a
+  dialect engine from the project's own dialect crates (instrumenting the
+  project's pliron) and rebuilds it when their sources change. Hover,
+  definition, references and diagnostics in the IR view come from it:
+  hover shows the dialects' Rust docs, **d** on an op or type name shows
+  its Rust definition. While the engine builds, the syntax layer answers
+  and the panel says so.
+
+Then: load a module (from the project, a file, or pasted text) → **Load
+module** → **Show module IR**, or choose target/config axes → **Start run**
+→ **inspect** → pick a pass → **Show IR**. In the IR view, click a token
+for hover info, then press **d** (definition) or **r** (references);
+**Diagnostics** shows parse/verify state; **artifact** downloads the
+object plus sidecars. `--frontend-dir DIR` serves a built frontend from
+DIR instead of the checkout default.
+
+Without a project, `--server 127.0.0.1:PORT` connects the panels to a
+hand-started analysis server (`crabbit-analysisd --http 127.0.0.1:PORT`),
+with the resident server's own (lexical) language queries.
 
 The end-to-end test for all of the above:
 `python3 tools/e2e_analysis_ui.py <crabbit-analysisd> <pliron-inspect> <module.plir>`.
