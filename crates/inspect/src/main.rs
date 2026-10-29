@@ -22,6 +22,12 @@ struct Args {
     #[arg(long)]
     no_open: bool,
 
+    /// Listen on all network interfaces instead of 127.0.0.1 only. There is
+    /// no authentication: anyone who can reach the port can open a project
+    /// (building and running its binaries) and read files under it.
+    #[arg(long)]
+    listen_all: bool,
+
     /// Driver binary path for future CLI-backed render requests.
     #[arg(long)]
     driver: Option<String>,
@@ -83,18 +89,30 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let app = build_router(state);
-    let addr = format!("127.0.0.1:{}", args.port);
+    let host = if args.listen_all {
+        "0.0.0.0"
+    } else {
+        "127.0.0.1"
+    };
+    let addr = format!("{}:{}", host, args.port);
+    let local = format!("127.0.0.1:{}", args.port);
 
     if !args.no_open {
-        let url = format!("http://{}", addr);
+        let url = format!("http://{}", local);
         eprintln!("Opening browser at {}", url);
         let _ = open::that(&url);
     }
 
     eprintln!(
         "Server listening on http://{} (analysis + project panels: http://{}/analysis)",
-        addr, addr
+        addr, local
     );
+    if args.listen_all {
+        eprintln!(
+            "Listening on all interfaces without authentication: anyone who can reach port {} can open projects on this machine",
+            args.port
+        );
+    }
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
 
