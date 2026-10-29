@@ -7,6 +7,7 @@ import "monaco-editor/esm/vs/basic-languages/rust/rust.contribution";
 
 import { irDefinition, irHover, irReferences } from "../api/client";
 import type { LspRange } from "../api/protocol";
+import { installStoredDiffs } from "./storedDiffs";
 
 declare global {
   interface Window {
@@ -22,6 +23,8 @@ let configured = false;
 export function configurePlironMonaco() {
   if (configured) return;
   configured = true;
+  // First: Monaco takes it only while its services have not started.
+  installStoredDiffs();
   window.MonacoEnvironment = {
     getWorker() {
       return new editorWorker();

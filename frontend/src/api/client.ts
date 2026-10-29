@@ -3,6 +3,7 @@ import type {
   DiagnosticsResult,
   DisplayCapabilities,
   FolderListing,
+  HistoryStep,
   HoverResult,
   LspPosition,
   OpenTraceResponse,
@@ -65,6 +66,11 @@ export function openTrace(filepath: string): Promise<OpenTraceResponse> {
 
 export function importTrace(filename: string, contents: string): Promise<OpenTraceResponse> {
   return post<OpenTraceResponse>("/api/traces/import", { filename, contents });
+}
+
+/** Step `step` of the trace's history (diff and blame), computed once. */
+export function historyStep(filepath: string, step: number): Promise<HistoryStep> {
+  return post<HistoryStep>("/api/history/step", { filepath, step });
 }
 
 /** Hand an IR snapshot to the server; views and queries refer to it by id. */

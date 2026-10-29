@@ -1,16 +1,21 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api";
 
-import type { TraceSnapshot } from "../api/protocol";
+import { historyStep } from "../api/client";
+import type { HistoryHunk, HistoryStep, TraceSnapshot } from "../api/protocol";
 import { IR_LANGUAGE, THEME, configurePlironMonaco } from "./monacoSetup";
+import { forgetDiff, storeDiff } from "./storedDiffs";
 
 export type IrSnapshot = TraceSnapshot;
 
 type IrDiffViewProps = {
   snapshots: IrSnapshot[];
+  /** The trace file: the server keeps its history (diff and blame of every step). */
+  tracePath: string;
 };
 
-type DiffCache = Record<number, monaco.editor.ILineChange[]>;
+/** The step on screen and its history (none for the initial snapshot). */
+type Shown = { step: number; history: HistoryStep | null };
 
 const BLAME_PALETTE = [
   "#4fc1ff",
@@ -25,25 +30,23 @@ const BLAME_PALETTE = [
   "#569cd6"
 ];
 
-export function IrDiffView({ snapshots }: IrDiffViewProps) {
+const BLAME_STYLE_ID = "ir-diff-blame-styles";
+
+export function IrDiffView({ snapshots, tracePath }: IrDiffViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<monaco.editor.IStandaloneDiffEditor | null>(null);
-  const originalModelRef = useRef<monaco.editor.ITextModel | null>(null);
-  const modifiedModelRef = useRef<monaco.editor.ITextModel | null>(null);
-  const hiddenContainerRef = useRef<HTMLDivElement | null>(null);
-  const hiddenEditorRef = useRef<monaco.editor.IStandaloneDiffEditor | null>(null);
-  const diffCacheRef = useRef<DiffCache>({});
-  const blameOverlayRef = useRef<HTMLDivElement | null>(null);
-  const blameScrollRef = useRef<monaco.IDisposable | null>(null);
-  const blameGenerationRef = useRef(0);
+  const modelsRef = useRef<{ original: monaco.editor.ITextModel; modified: monaco.editor.ITextModel } | null>(null);
+  const historyRef = useRef(new Map<number, Promise<HistoryStep>>());
+  const shownRef = useRef<Shown | null>(null);
 
   const [currentStep, setCurrentStep] = useState(() => initialDiffStep(snapshots));
+  const [shown, setShown] = useState<Shown | null>(null);
   const [hideUnchanged, setHideUnchanged] = useState(true);
   const [blameEnabled, setBlameEnabled] = useState(false);
   const [diffColorsEnabled, setDiffColorsEnabled] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const currentSnapshot = snapshots[currentStep] ?? null;
-  const previousSnapshot = currentStep > 0 ? snapshots[currentStep - 1] : null;
 
   const stepLabel = useMemo(() => {
     if (!currentSnapshot) return "No snapshots";
@@ -51,19 +54,30 @@ export function IrDiffView({ snapshots }: IrDiffViewProps) {
     return `${label}  (${currentStep + 1}/${snapshots.length})`;
   }, [currentSnapshot, currentStep, snapshots.length]);
 
-  const clearBlameOverlay = useCallback(() => {
-    blameOverlayRef.current?.remove();
-    blameOverlayRef.current = null;
-    blameScrollRef.current?.dispose();
-    blameScrollRef.current = null;
-  }, []);
+  /** The history of `step`, asked for once per trace. */
+  const history = useCallback(
+    (step: number) => {
+      let pending = historyRef.current.get(step);
+      if (!pending) {
+        pending = historyStep(tracePath, step);
+        historyRef.current.set(step, pending);
+        pending.catch(() => historyRef.current.delete(step));
+      }
+      return pending;
+    },
+    [tracePath]
+  );
+
+  useEffect(() => {
+    historyRef.current = new Map();
+    setCurrentStep((step) => (step >= snapshots.length ? initialDiffStep(snapshots) : step));
+  }, [snapshots, tracePath]);
 
   useEffect(() => {
     configurePlironMonaco();
-
     if (!containerRef.current || editorRef.current) return;
 
-    editorRef.current = monaco.editor.createDiffEditor(containerRef.current, {
+    const editor = monaco.editor.createDiffEditor(containerRef.current, {
       readOnly: true,
       renderSideBySide: true,
       automaticLayout: true,
@@ -77,75 +91,122 @@ export function IrDiffView({ snapshots }: IrDiffViewProps) {
         revealLineCount: 20
       }
     } as monaco.editor.IDiffEditorConstructionOptions);
+    editorRef.current = editor;
+
+    // The cursor's row, and the row it corresponds to on the other side.
+    const originalEditor = editor.getOriginalEditor();
+    const modifiedEditor = editor.getModifiedEditor();
+    const originalRows = originalEditor.createDecorationsCollection();
+    const modifiedRows = modifiedEditor.createDecorationsCollection();
+    const highlight = (side: "original" | "modified", line: number) => {
+      const hunks = shownRef.current?.history?.hunks;
+      const [here, there] = side === "original" ? [originalRows, modifiedRows] : [modifiedRows, originalRows];
+      here.set([rowDecoration(line, line + 1, "diff-cursor-row")]);
+      const other = hunks ? correspondingLines(hunks, line, side) : null;
+      there.set(other ? [rowDecoration(other[0], other[1], "diff-corresponding-row")] : []);
+    };
+    const listeners = [
+      originalEditor.onDidChangeCursorPosition((event) => highlight("original", event.position.lineNumber)),
+      modifiedEditor.onDidChangeCursorPosition((event) => highlight("modified", event.position.lineNumber))
+    ];
 
     return () => {
-      clearBlameOverlay();
-      originalModelRef.current?.dispose();
-      modifiedModelRef.current?.dispose();
-      hiddenEditorRef.current?.dispose();
-      hiddenContainerRef.current?.remove();
-      editorRef.current?.dispose();
-      originalModelRef.current = null;
-      modifiedModelRef.current = null;
-      hiddenEditorRef.current = null;
-      hiddenContainerRef.current = null;
+      listeners.forEach((listener) => listener.dispose());
+      const models = modelsRef.current;
+      editor.dispose();
+      if (models) {
+        forgetDiff(models.modified);
+        models.original.dispose();
+        models.modified.dispose();
+      }
+      modelsRef.current = null;
       editorRef.current = null;
     };
-  }, [clearBlameOverlay]);
+  }, []);
 
-  useEffect(() => {
-    setCurrentStep((step) => {
-      if (step >= snapshots.length) return initialDiffStep(snapshots);
-      return step;
-    });
-    diffCacheRef.current = {};
-  }, [snapshots]);
-
+  // Show a step: its diff comes from the history, Monaco computes none.
   useEffect(() => {
     const editor = editorRef.current;
     if (!editor) return;
+    let live = true;
+    const step = currentStep;
+    const current = snapshots[step] ?? null;
+    const previous = step > 0 ? snapshots[step - 1] : null;
 
-    clearBlameOverlay();
-    updateEditorRightPadding(editor.getModifiedEditor(), 0);
+    const show = (stepHistory: HistoryStep | null) => {
+      if (!live) return;
+      const old = modelsRef.current;
+      const original = monaco.editor.createModel(previous?.ir ?? "", previous?.isError ? "plaintext" : IR_LANGUAGE);
+      const modified = monaco.editor.createModel(current?.ir ?? "", current?.isError ? "plaintext" : IR_LANGUAGE);
+      if (stepHistory) storeDiff(original, modified, stepHistory);
+      // Swap first, dispose after: the editor must never hold a disposed model.
+      editor.setModel({ original, modified });
+      modelsRef.current = { original, modified };
+      if (old) {
+        forgetDiff(old.modified);
+        old.original.dispose();
+        old.modified.dispose();
+      }
+      const next = { step, history: stepHistory };
+      shownRef.current = next;
+      setShown(next);
+    };
 
-    originalModelRef.current?.dispose();
-    modifiedModelRef.current?.dispose();
-
-    const beforeLanguage = previousSnapshot?.isError ? "plaintext" : IR_LANGUAGE;
-    const afterLanguage = currentSnapshot?.isError ? "plaintext" : IR_LANGUAGE;
-
-    originalModelRef.current = monaco.editor.createModel(previousSnapshot?.ir ?? "", beforeLanguage);
-    modifiedModelRef.current = monaco.editor.createModel(currentSnapshot?.ir ?? "", afterLanguage);
-    editor.setModel({
-      original: originalModelRef.current,
-      modified: modifiedModelRef.current
-    });
-
-    window.setTimeout(() => {
-      editor.layout();
-      void updateBlameOverlay();
-    }, 0);
-    // updateBlameOverlay intentionally reads current refs/state through closures.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentSnapshot, previousSnapshot, clearBlameOverlay]);
+    if (step === 0) {
+      show(null);
+    } else {
+      history(step).then(
+        (stepHistory) => {
+          setError(null);
+          show(stepHistory);
+        },
+        (err: unknown) => {
+          if (!live) return;
+          setError(err instanceof Error ? err.message : String(err));
+          show(null);
+        }
+      );
+    }
+    // The neighbours, so the next step's diff is already here.
+    for (const neighbour of [step + 1, step - 1]) {
+      if (neighbour >= 1 && neighbour < snapshots.length) history(neighbour).catch(() => undefined);
+    }
+    return () => {
+      live = false;
+    };
+  }, [currentStep, snapshots, history]);
 
   useEffect(() => {
-    const editor = editorRef.current;
-    if (!editor) return;
-    editor.updateOptions({
+    editorRef.current?.updateOptions({
       hideUnchangedRegions: { enabled: hideUnchanged }
     } as monaco.editor.IDiffEditorOptions);
-    void updateBlameOverlay();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hideUnchanged]);
 
+  // Blame: who last changed each line of the shown snapshot, in its gutter.
   useEffect(() => {
-    if (!diffColorsEnabled) {
-      return;
+    const editor = editorRef.current;
+    if (!editor || !shown?.history || !blameEnabled) return;
+    const labels = snapshots.map((snapshot, index) => (index === 0 ? "initial" : snapshot.label));
+    installBlameStyles(labels);
+    const modifiedEditor = editor.getModifiedEditor();
+    const decorations: monaco.editor.IModelDeltaDecoration[] = [];
+    let line = 1;
+    for (const [step, count] of shown.history.blame) {
+      decorations.push({
+        range: new monaco.Range(line, 1, line + count - 1, 1),
+        options: { isWholeLine: true, linesDecorationsClassName: `blame-mark blame-step-${step}` }
+      });
+      line += count;
     }
-    void updateBlameOverlay();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [blameEnabled, diffColorsEnabled]);
+    // Long pass names end in an ellipsis rather than squeeze the code.
+    const width = Math.min(18, Math.max(...labels.map((label) => label.length))) + 1;
+    modifiedEditor.updateOptions({ lineDecorationsWidth: `${width}ch` } as unknown as monaco.editor.IEditorOptions);
+    const collection = modifiedEditor.createDecorationsCollection(decorations);
+    return () => {
+      collection.clear();
+      modifiedEditor.updateOptions({ lineDecorationsWidth: 10 });
+    };
+  }, [shown, blameEnabled, snapshots]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -162,111 +223,17 @@ export function IrDiffView({ snapshots }: IrDiffViewProps) {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [snapshots.length]);
 
-  const updateBlameOverlay = useCallback(async () => {
-    clearBlameOverlay();
-
-    const editor = editorRef.current;
-    if (!editor || !blameEnabled || currentStep === 0 || snapshots.length === 0) return;
-
-    const generation = ++blameGenerationRef.current;
-    const blame = await computeBlame(currentStep, snapshots, diffCacheRef, hiddenEditorRef, hiddenContainerRef);
-    if (generation !== blameGenerationRef.current || blame.length === 0) return;
-
-    const modifiedEditor = editor.getModifiedEditor();
-    const lineHeight = modifiedEditor.getOption(monaco.editor.EditorOption.lineHeight);
-    const passNames = [...new Set(blame)];
-    const colorMap = new Map<string, string>();
-    let colorIndex = 0;
-
-    for (const name of passNames) {
-      if (name === "initial") {
-        colorMap.set(name, "#555555");
-      } else {
-        colorMap.set(name, BLAME_PALETTE[colorIndex % BLAME_PALETTE.length]);
-        colorIndex++;
-      }
-    }
-
-    const maxLength = Math.max(...passNames.map((name) => name.length));
-    const overlayWidth = Math.ceil((maxLength + 4) * 7.225) + 8;
-    const overlay = document.createElement("div");
-    overlay.className = "blame-overlay";
-    overlay.style.width = `${overlayWidth}px`;
-
-    const inner = document.createElement("div");
-    inner.className = "blame-overlay-inner";
-    const blameRows: HTMLDivElement[] = [];
-
-    for (let i = 0; i < blame.length; i++) {
-      const row = document.createElement("div");
-      row.textContent = `│  ${blame[i].padEnd(maxLength)}`;
-      row.className = "blame-row";
-      row.style.height = `${lineHeight}px`;
-      row.style.lineHeight = `${lineHeight}px`;
-      row.style.color = colorMap.get(blame[i]) ?? "#9aa4b2";
-      inner.appendChild(row);
-      blameRows.push(row);
-    }
-
-    overlay.appendChild(inner);
-    const editorDom = modifiedEditor.getDomNode();
-    const overflowGuard = editorDom?.querySelector(".overflow-guard");
-    const overlayHost = overflowGuard ?? editorDom;
-    if (!overlayHost) return;
-    overlayHost.appendChild(overlay);
-    blameOverlayRef.current = overlay;
-
-    let lastScrollHeight = 0;
-    const positionRows = () => {
-      let previousTop = -1;
-      for (let i = 0; i < blameRows.length; i++) {
-        const top = modifiedEditor.getTopForLineNumber(i + 1);
-        if (top === previousTop) {
-          blameRows[i].style.display = "none";
-        } else {
-          blameRows[i].style.display = "";
-          blameRows[i].style.top = `${top}px`;
-        }
-        previousTop = top;
-      }
-    };
-
-    const syncScroll = () => {
-      inner.style.transform = `translateY(${-modifiedEditor.getScrollTop()}px)`;
-      const scrollHeight = modifiedEditor.getScrollHeight();
-      if (scrollHeight !== lastScrollHeight) {
-        lastScrollHeight = scrollHeight;
-        positionRows();
-      }
-    };
-
-    positionRows();
-    lastScrollHeight = modifiedEditor.getScrollHeight();
-    syncScroll();
-    window.setTimeout(() => {
-      positionRows();
-      syncScroll();
-    }, 100);
-
-    blameScrollRef.current = modifiedEditor.onDidScrollChange(syncScroll);
-    updateEditorRightPadding(modifiedEditor, overlayWidth);
-  }, [blameEnabled, clearBlameOverlay, currentStep, snapshots]);
-
-  const toggleBlame = () => {
-    setBlameEnabled((enabled) => {
-      const next = !enabled;
-      if (!next) {
-        clearBlameOverlay();
-        updateEditorRightPadding(editorRef.current?.getModifiedEditor() ?? null, 0);
-      }
-      return next;
-    });
-  };
+  const identical = shown?.step === currentStep && shown.history?.identical === true;
+  const note = identical ? "no change" : null;
 
   return (
     <section className={diffColorsEnabled ? "ir-diff-view" : "ir-diff-view no-diff-colors"}>
       <div className="diff-toolbar">
-        <div className={currentSnapshot?.isError ? "step-label error" : "step-label"}>{stepLabel}</div>
+        <div className={currentSnapshot?.isError ? "step-label error" : "step-label"}>
+          {stepLabel}
+          {note ? <span className="step-note"> · {note}</span> : null}
+          {error ? <span className="step-note error"> · {error}</span> : null}
+        </div>
         <div className="diff-toolbar-actions">
           <button type="button" onClick={() => setCurrentStep((step) => Math.max(0, step - 1))} disabled={currentStep <= 0}>
             Prev
@@ -281,7 +248,12 @@ export function IrDiffView({ snapshots }: IrDiffViewProps) {
           <button type="button" onClick={() => setHideUnchanged((enabled) => !enabled)}>
             {hideUnchanged ? "Show All" : "Hide Unchanged"}
           </button>
-          <button className={blameEnabled ? "active" : ""} type="button" onClick={toggleBlame} disabled={currentStep <= 0}>
+          <button
+            className={blameEnabled ? "active" : ""}
+            type="button"
+            onClick={() => setBlameEnabled((enabled) => !enabled)}
+            disabled={currentStep <= 0}
+          >
             {blameEnabled ? "Hide Blame" : "Blame"}
           </button>
           <button className={!diffColorsEnabled ? "active" : ""} type="button" onClick={() => setDiffColorsEnabled((enabled) => !enabled)}>
@@ -289,7 +261,20 @@ export function IrDiffView({ snapshots }: IrDiffViewProps) {
           </button>
         </div>
       </div>
-      <div className="diff-editor" ref={containerRef} />
+      <div className="diff-body">
+        <div className="diff-editor" ref={containerRef} />
+        {/* Monaco never hides an unchanged region that is the whole file. */}
+        {identical && hideUnchanged ? (
+          <div className="diff-identical">
+            <span>
+              {currentSnapshot?.label ?? "This pass"} changed nothing: the snapshot is the previous one.
+            </span>
+            <button type="button" onClick={() => setHideUnchanged(false)}>
+              Show All
+            </button>
+          </div>
+        ) : null}
+      </div>
     </section>
   );
 }
@@ -298,122 +283,54 @@ function initialDiffStep(snapshots: IrSnapshot[]) {
   return snapshots.length > 1 ? 1 : 0;
 }
 
-async function computeBlame(
-  currentStep: number,
-  snapshots: IrSnapshot[],
-    diffCacheRef: MutableRefObject<DiffCache>,
-    hiddenEditorRef: MutableRefObject<monaco.editor.IStandaloneDiffEditor | null>,
-    hiddenContainerRef: MutableRefObject<HTMLDivElement | null>
-): Promise<string[]> {
-  if (currentStep <= 0) return [];
-
-  const cache = diffCacheRef.current;
-  for (let i = 1; i <= currentStep; i++) {
-    if (cache[i] === undefined) {
-      cache[i] = await computeMonacoDiff(snapshots[i - 1].ir, snapshots[i].ir, hiddenEditorRef, hiddenContainerRef);
-    }
-  }
-
-  let blame = snapshots[0].ir.split("\n").map(() => "initial");
-
-  for (let step = 1; step <= currentStep; step++) {
-    const lineChanges = cache[step];
-    if (!lineChanges || lineChanges.length === 0) continue;
-
-    const label = snapshots[step].label;
-    const nextBlame: string[] = [];
-    let previousIndex = 0;
-
-    for (const change of lineChanges) {
-      const unchangedEnd = change.originalEndLineNumber === 0 ? change.originalStartLineNumber : change.originalStartLineNumber - 1;
-
-      while (previousIndex < unchangedEnd) {
-        nextBlame.push(blame[previousIndex]);
-        previousIndex++;
-      }
-
-      if (change.originalEndLineNumber > 0) {
-        previousIndex = change.originalEndLineNumber;
-      }
-
-      if (change.modifiedEndLineNumber > 0) {
-        const count = change.modifiedEndLineNumber - change.modifiedStartLineNumber + 1;
-        for (let i = 0; i < count; i++) {
-          nextBlame.push(label);
-        }
-      }
-    }
-
-    while (previousIndex < blame.length) {
-      nextBlame.push(blame[previousIndex]);
-      previousIndex++;
-    }
-
-    blame = nextBlame;
-  }
-
-  return blame;
+function rowDecoration(start: number, end: number, className: string): monaco.editor.IModelDeltaDecoration {
+  return {
+    range: new monaco.Range(start, 1, Math.max(start, end - 1), 1),
+    options: { isWholeLine: true, className }
+  };
 }
 
-function computeMonacoDiff(
-  previousIr: string,
-  currentIr: string,
-  hiddenEditorRef: MutableRefObject<monaco.editor.IStandaloneDiffEditor | null>,
-  hiddenContainerRef: MutableRefObject<HTMLDivElement | null>
-): Promise<monaco.editor.ILineChange[]> {
-  if (previousIr === currentIr) return Promise.resolve([]);
-
-  const editor = getHiddenDiffEditor(hiddenEditorRef, hiddenContainerRef);
-  const original = monaco.editor.createModel(previousIr, "text/plain");
-  const modified = monaco.editor.createModel(currentIr, "text/plain");
-
-  editor.setModel({ original, modified });
-
-  return new Promise((resolve) => {
-    const immediate = editor.getLineChanges();
-    if (immediate !== null) {
-      original.dispose();
-      modified.dispose();
-      resolve(immediate);
-      return;
+/**
+ * The line on the other side that `line` of `side` corresponds to, as
+ * `[start, end)`: the same line outside the changes; inside a change, the
+ * line it is the same op (or block) as, and none if it has no counterpart
+ * (it was added or removed).
+ */
+export function correspondingLines(
+  hunks: HistoryHunk[],
+  line: number,
+  side: "original" | "modified"
+): [number, number] | null {
+  const [here, there] = side === "original" ? [0, 1] : [1, 0];
+  let delta = 0;
+  for (const hunk of hunks) {
+    const [start, end] = side === "original" ? hunk.original : hunk.modified;
+    const otherEnd = side === "original" ? hunk.modified[1] : hunk.original[1];
+    if (line < start) break;
+    if (line < end) {
+      const pair = hunk.pairs.find((candidate) => candidate[here] === line);
+      return pair ? [pair[there], pair[there] + 1] : null;
     }
-
-    let disposable: monaco.IDisposable | null = null;
-    const timeout = window.setTimeout(() => {
-      disposable?.dispose();
-      original.dispose();
-      modified.dispose();
-      resolve([]);
-    }, 5000);
-
-    disposable = editor.onDidUpdateDiff(() => {
-      const changes = editor.getLineChanges();
-      if (changes === null) return;
-      window.clearTimeout(timeout);
-      disposable?.dispose();
-      original.dispose();
-      modified.dispose();
-      resolve(changes);
-    });
-  });
-}
-
-function getHiddenDiffEditor(
-  hiddenEditorRef: MutableRefObject<monaco.editor.IStandaloneDiffEditor | null>,
-  hiddenContainerRef: MutableRefObject<HTMLDivElement | null>
-) {
-  if (!hiddenEditorRef.current) {
-    const container = document.createElement("div");
-    container.style.cssText = "position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;";
-    document.body.appendChild(container);
-    hiddenContainerRef.current = container;
-    hiddenEditorRef.current = monaco.editor.createDiffEditor(container, {
-      automaticLayout: false
-    });
+    delta = otherEnd - end;
   }
-  return hiddenEditorRef.current;
+  return [line + delta, line + delta + 1];
 }
 
-function updateEditorRightPadding(editor: monaco.editor.IStandaloneCodeEditor | null, right: number) {
-  editor?.updateOptions({ padding: { right } } as unknown as monaco.editor.IEditorOptions);
+/** One gutter label per step: `.blame-step-<i>` shows step i's pass name. */
+function installBlameStyles(labels: string[]) {
+  const css = labels
+    .map(
+      (label, index) =>
+        `.blame-step-${index}::before { content: ${JSON.stringify(label)}; color: ${
+          index === 0 ? "#6b7280" : BLAME_PALETTE[(index - 1) % BLAME_PALETTE.length]
+        }; }`
+    )
+    .join("\n");
+  let style = document.getElementById(BLAME_STYLE_ID) as HTMLStyleElement | null;
+  if (!style) {
+    style = document.createElement("style");
+    style.id = BLAME_STYLE_ID;
+    document.head.appendChild(style);
+  }
+  if (style.textContent !== css) style.textContent = css;
 }

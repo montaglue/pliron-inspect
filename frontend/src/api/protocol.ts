@@ -48,6 +48,29 @@ export type TraceSnapshot = {
   isError?: boolean;
 };
 
+/** One step of a trace's history: snapshot `step` against the one before. */
+export type HistoryStep = {
+  /** The snapshot is the previous one, byte for byte. */
+  identical: boolean;
+  hunks: HistoryHunk[];
+  /** Who last changed each line: runs of `[step, line count]`, in order. */
+  blame: [number, number][];
+};
+
+/**
+ * Lines `[start, end)` (1-based) of the previous snapshot replaced by lines
+ * `[start, end)` of this one. `pairs` are the lines that are the same op (or
+ * block) on both sides, `[original line, modified line]`, increasing on
+ * both; `inner` are their changed characters: `[original line, start column,
+ * end column, modified line, start column, end column]`.
+ */
+export type HistoryHunk = {
+  original: [number, number];
+  modified: [number, number];
+  pairs: [number, number][];
+  inner: [number, number, number, number, number, number][];
+};
+
 export type ViewCapability = {
   id: ViewId;
   label: string;

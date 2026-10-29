@@ -321,7 +321,7 @@ function Viewer({ session, onChangeFolders }: { session: SessionState; onChangeF
             />
           ) : activeView === "ir-diff" ? (
             snapshots.length > 0 ? (
-              <IrDiffView snapshots={snapshots} />
+              <IrDiffView snapshots={snapshots} tracePath={activeTrace?.filepath ?? ""} />
             ) : (
               <div className="no-trace-state">
                 <TraceIcon />

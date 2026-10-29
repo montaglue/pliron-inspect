@@ -12,6 +12,7 @@ use pliron_inspect_protocol::trace::{self, TRACE_EXTENSION};
 use pliron_inspect_protocol::types::*;
 use serde_json::json;
 
+use crate::history::Histories;
 use crate::session::Session;
 
 const PROTOCOL_VERSION: u32 = 1;
@@ -22,6 +23,8 @@ pub struct AppState {
     /// defaults to the checkout's `frontend/dist`.
     pub frontend_dir: Option<PathBuf>,
     pub session: Arc<Session>,
+    /// Diff and blame of the traces opened, computed once per trace.
+    pub histories: Arc<Histories>,
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -37,6 +40,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/traces", get(list_traces))
         .route("/api/traces/open", post(open_trace))
         .route("/api/traces/import", post(import_trace))
+        .route("/api/history/step", post(history_step))
         .route("/api/ir", post(add_ir))
         .route("/api/ir/render", post(render_ir))
         .route("/api/ir/{query}", post(ir_query))
@@ -156,25 +160,56 @@ async fn list_traces(State(state): State<AppState>) -> Response {
     .into_response()
 }
 
-async fn open_trace(State(state): State<AppState>, Json(req): Json<OpenTraceRequest>) -> Response {
+/// `filepath` as a trace of the traces folder (canonical), or why not.
+async fn trace_in_folder(state: &AppState, filepath: &str) -> Result<PathBuf, String> {
     let Some(dir) = state.session.traces().await else {
-        return bad_request("choose a traces folder first");
+        return Err("choose a traces folder first".to_string());
     };
-    let path = match std::fs::canonicalize(&req.filepath) {
-        Ok(path) => path,
-        Err(error) => return bad_request(format!("{}: {error}", req.filepath)),
-    };
+    let path = std::fs::canonicalize(filepath).map_err(|error| format!("{filepath}: {error}"))?;
     if !path.starts_with(&dir) {
-        return bad_request(format!("{} is not in the traces folder", path.display()));
+        return Err(format!("{} is not in the traces folder", path.display()));
     }
     if path.extension().and_then(|ext| ext.to_str()) != Some(TRACE_EXTENSION) {
-        return bad_request(format!(
+        return Err(format!(
             "expected a .{TRACE_EXTENSION} trace file: {}",
             path.display()
         ));
     }
+    Ok(path)
+}
+
+async fn open_trace(State(state): State<AppState>, Json(req): Json<OpenTraceRequest>) -> Response {
+    let path = match trace_in_folder(&state, &req.filepath).await {
+        Ok(path) => path,
+        Err(error) => return bad_request(error),
+    };
     match trace::CrabbitTraceFile::read(&path) {
         Ok(trace) => trace_response(path, trace),
+        Err(error) => bad_request(format!("{error:#}")),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct HistoryStepRequest {
+    filepath: String,
+    step: usize,
+}
+
+/// One step of a trace's history: the diff of snapshot `step` against the
+/// one before, and the blame of its lines.
+async fn history_step(
+    State(state): State<AppState>,
+    Json(req): Json<HistoryStepRequest>,
+) -> Response {
+    let path = match trace_in_folder(&state, &req.filepath).await {
+        Ok(path) => path,
+        Err(error) => return bad_request(error),
+    };
+    match state.histories.steps(&path).await {
+        Ok(steps) => match steps.get(req.step) {
+            Some(step) => Json(step).into_response(),
+            None => bad_request(format!("the trace has no step {}", req.step)),
+        },
         Err(error) => bad_request(format!("{error:#}")),
     }
 }
