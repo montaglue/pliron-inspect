@@ -25,6 +25,7 @@ import { type Bpgo, bpgoOf, snapshotProfile } from "./profile";
 import { FolderIcon } from "./start/FolderPicker";
 import { StartView, engineLine } from "./start/StartView";
 import { CfgView } from "./views/CfgView";
+import { FlameGraphView } from "./views/FlameGraphView";
 import { IrDiffView } from "./views/IrDiffView";
 import { TextView } from "./views/TextView";
 import { TreeView } from "./views/TreeView";
@@ -135,6 +136,8 @@ function Viewer({ session, onChangeFolders }: { session: SessionState; onChangeF
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [document, setDocument] = useState<RenderDocument | null>(null);
   const [cfgRootId, setCfgRootId] = useState<string | undefined>(undefined);
+  /** A line the Text view is asked to bring into view (from another view). */
+  const [reveal, setReveal] = useState<{ line: number } | null>(null);
   const [traceList, setTraceList] = useState<TraceListResponse | null>(null);
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
   const [activeTrace, setActiveTrace] = useState<OpenTraceResponse | null>(null);
@@ -318,6 +321,7 @@ function Viewer({ session, onChangeFolders }: { session: SessionState; onChangeF
               engineState={engineState}
               profile={profile}
               profileNote={profileNote}
+              reveal={reveal}
             />
           ) : activeView === "ir-diff" ? (
             snapshots.length > 0 ? (
@@ -340,6 +344,18 @@ function Viewer({ session, onChangeFolders }: { session: SessionState; onChangeF
               <TraceIcon />
               <span>Select a trace to inspect IR snapshots</span>
             </div>
+          ) : activeView === "flamegraph" ? (
+            <FlameGraphView
+              tracePath={activeTrace?.filepath ?? ""}
+              step={snapshotStep}
+              irId={irId}
+              profiled={bpgo !== null}
+              snapshot={snapshotLabel(snapshots, snapshotStep) ?? ""}
+              onShowInText={(line) => {
+                setReveal({ line });
+                setActiveView("text");
+              }}
+            />
           ) : activeView === "cfg" ? (
             <CfgView
               document={document}
@@ -560,6 +576,8 @@ function ViewIcon({ view }: { view: ViewId }) {
       return <DiffIcon />;
     case "cfg":
       return <CfgIcon />;
+    case "flamegraph":
+      return <FlameIcon />;
     case "tree":
       return <TreeIcon />;
     case "text":
@@ -586,6 +604,17 @@ function DiffIcon() {
       <path d="M12 5l3 3-3 3" />
       <path d="M15 16h-5" />
       <path d="M12 13l-3 3 3 3" />
+    </SvgIcon>
+  );
+}
+
+function FlameIcon() {
+  return (
+    <SvgIcon>
+      <path d="M4 19h16" />
+      <path d="M5 15h14v4H5z" />
+      <path d="M7 11h8v4H7z" />
+      <path d="M9 7h4v4H9z" />
     </SvgIcon>
   );
 }
@@ -711,6 +740,7 @@ const fallbackViews: Array<{ id: ViewId; label: string; description: string }> =
   { id: "text", label: "Text", description: "IR snapshots" },
   { id: "ir-diff", label: "IR Diff", description: "Snapshot diff" },
   { id: "cfg", label: "CFG", description: "Control-flow graph of a function" },
+  { id: "flamegraph", label: "Flamegraph", description: "Where a profiled run's cycles go: function, loop, block, op" },
   { id: "tree", label: "Tree", description: "Operation hierarchy" },
   { id: "versions", label: "Versions", description: "Trace versions of the selected project" }
 ];

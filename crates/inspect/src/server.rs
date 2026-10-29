@@ -13,6 +13,7 @@ use pliron_inspect_protocol::types::*;
 use serde_json::json;
 
 use crate::history::Histories;
+use crate::profile::Profiles;
 use crate::session::Session;
 
 const PROTOCOL_VERSION: u32 = 1;
@@ -25,6 +26,8 @@ pub struct AppState {
     pub session: Arc<Session>,
     /// Diff and blame of the traces opened, computed once per trace.
     pub histories: Arc<Histories>,
+    /// The profiles of the traces opened, read once per trace.
+    pub profiles: Arc<Profiles>,
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -41,6 +44,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/traces/open", post(open_trace))
         .route("/api/traces/import", post(import_trace))
         .route("/api/history/step", post(history_step))
+        .route("/api/profile/flamegraph", post(profile_flamegraph))
         .route("/api/ir", post(add_ir))
         .route("/api/ir/render", post(render_ir))
         .route("/api/ir/{query}", post(ir_query))
@@ -72,6 +76,11 @@ async fn capabilities() -> impl IntoResponse {
             ),
             ViewCapability::new("ir-diff", "IR Diff", "Snapshot diff"),
             ViewCapability::new("cfg", "CFG", "Control-flow graph of a function"),
+            ViewCapability::new(
+                "flamegraph",
+                "Flamegraph",
+                "Where a profiled run's cycles go: function, loop, block, op",
+            ),
             ViewCapability::new("tree", "Tree", "Operation hierarchy"),
             ViewCapability::new(
                 "versions",
@@ -211,6 +220,48 @@ async fn history_step(
             None => bad_request(format!("the trace has no step {}", req.step)),
         },
         Err(error) => bad_request(format!("{error:#}")),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct FlamegraphRequest {
+    filepath: String,
+    step: usize,
+    /// The server's id of the snapshot's IR (from `/api/ir`).
+    id: String,
+}
+
+/// The flamegraph of snapshot `step` of a profiled trace: `{"status":
+/// "ready", "graph", "partial"?}`, or `{"status": "pending" | "unavailable",
+/// "message"}`.
+async fn profile_flamegraph(
+    State(state): State<AppState>,
+    Json(req): Json<FlamegraphRequest>,
+) -> Response {
+    let path = match trace_in_folder(&state, &req.filepath).await {
+        Ok(path) => path,
+        Err(error) => return bad_request(error),
+    };
+    let profile = match state.profiles.snapshot(&path, req.step).await {
+        Ok(Some(profile)) => profile,
+        Ok(None) => {
+            return Json(json!({
+                "status": "unavailable",
+                "message": "The trace's profile does not reach this snapshot."
+            }))
+            .into_response();
+        }
+        Err(error) => return bad_request(format!("{error:#}")),
+    };
+    match state.session.flamegraph(&req.id, &profile).await {
+        Ok((graph, partial)) => {
+            Json(json!({ "status": "ready", "graph": graph, "partial": partial })).into_response()
+        }
+        Err((code, message)) => Json(json!({
+            "status": if code == "engine-pending" { "pending" } else { "unavailable" },
+            "message": message
+        }))
+        .into_response(),
     }
 }
 

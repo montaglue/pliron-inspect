@@ -1,4 +1,4 @@
-export type ViewId = "ir-diff" | "cfg" | "tree" | "text" | "versions";
+export type ViewId = "ir-diff" | "cfg" | "flamegraph" | "tree" | "text" | "versions";
 
 export type DisplayCapabilities = {
   protocolVersion: number;
@@ -47,6 +47,25 @@ export type TraceSnapshot = {
   ir: string;
   isError?: boolean;
 };
+
+/** A box of the flamegraph: as wide as the cycles under it. */
+export type FlameNode = {
+  name: string;
+  kind: "module" | "function" | "loop" | "block" | "op" | "decision" | "other";
+  cycles: number;
+  executions?: number;
+  /** The snapshot line (1-based) its IR starts on. */
+  line?: number;
+  /** Its IR, when the name shortens it. */
+  text?: string;
+  children?: FlameNode[];
+};
+
+export type FlameGraph = { root: FlameNode; total: number };
+
+export type FlamegraphResponse =
+  | { status: "ready"; graph: FlameGraph; partial?: string | null }
+  | { status: "pending" | "unavailable"; message: string };
 
 /** One step of a trace's history: snapshot `step` against the one before. */
 export type HistoryStep = {

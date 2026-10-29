@@ -10,6 +10,7 @@ use pliron_lsp_protocol::Model;
 use serde::Deserialize;
 
 pub mod cfg;
+pub mod flame;
 pub mod tree;
 
 pub const RENDER_PROTOCOL_VERSION: u32 = 1;

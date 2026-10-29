@@ -18,6 +18,8 @@ type TextViewProps = {
   profile?: SnapshotProfile | null;
   /** Why the trace's profile does not reach this snapshot, if it does not. */
   profileNote?: string | null;
+  /** A line to bring into view (a new object each time it is asked for). */
+  reveal?: { line: number } | null;
 };
 
 type Source = { model: monaco.editor.ITextModel; range: monaco.IRange };
@@ -29,7 +31,7 @@ const severities: Record<IrDiagnostic["severity"], monaco.MarkerSeverity> = {
   hint: monaco.MarkerSeverity.Hint
 };
 
-export function TextView({ snapshots, step, onStepChange, irId, engineState, profile, profileNote }: TextViewProps) {
+export function TextView({ snapshots, step, onStepChange, irId, engineState, profile, profileNote, reveal }: TextViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const [model, setModel] = useState<monaco.editor.ITextModel | null>(null);
@@ -132,6 +134,24 @@ export function TextView({ snapshots, step, onStepChange, irId, engineState, pro
       if (!model.isDisposed()) collection.clear();
     };
   }, [model, profile]);
+
+  // A line asked for (from another view): centered, the cursor on it.
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor || !model || !reveal || editor.getModel() !== model) return;
+    const line = Math.min(reveal.line, model.getLineCount());
+    editor.revealLineInCenter(line);
+    editor.setPosition({ lineNumber: line, column: model.getLineFirstNonWhitespaceColumn(line) || 1 });
+    editor.focus();
+    const flash = editor.createDecorationsCollection([
+      { range: new monaco.Range(line, 1, line, 1), options: { isWholeLine: true, className: "revealed-line" } }
+    ]);
+    const timer = window.setTimeout(() => flash.clear(), 1600);
+    return () => {
+      window.clearTimeout(timer);
+      flash.clear();
+    };
+  }, [reveal, model]);
 
   // Parse and verifier diagnostics of the snapshot, as markers.
   useEffect(() => {

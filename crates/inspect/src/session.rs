@@ -190,33 +190,16 @@ impl Session {
             "tree" => "Tree",
             _ => view,
         };
-        let note = |code: &str, message: String| {
-            render::diagnostic_document(view, id, title, code, message)
-        };
         if view != "cfg" && view != "tree" {
-            return note("unknown-view", format!("Unknown view: {view}"));
-        }
-        let Some(text) = self.doc(id).await else {
-            return note(
-                "unknown-document",
-                "This snapshot is no longer kept by the server; open the trace again.".into(),
+            return render::diagnostic_document(
+                view,
+                id,
+                title,
+                "unknown-view",
+                format!("Unknown view: {view}"),
             );
-        };
-        let dialects = match &*self.dialects.read().await {
-            Slot::Ready(d) => Arc::clone(d),
-            Slot::None => {
-                return note(
-                    "no-dialects",
-                    "Choose a dialects folder: its dialect engine reads the IR for this view."
-                        .into(),
-                );
-            }
-            Slot::Opening { .. } => {
-                return note("engine-pending", "Starting pliron-lsp…".into());
-            }
-            Slot::Error { message, .. } => return note("dialects-error", message.clone()),
-        };
-        match dialects.model(id, &text).await {
+        }
+        match self.ready_model(id).await {
             Ok(model) => {
                 let mut doc = match view {
                     "cfg" => render::cfg::cfg_document(&model.ir, id, root),
@@ -233,9 +216,54 @@ impl Session {
                 }
                 doc
             }
-            Err(NoModel::Pending(message)) => note("engine-pending", message),
-            Err(NoModel::Failed(message)) => note("no-model", message),
+            Err((code, message)) => render::diagnostic_document(view, id, title, &code, message),
         }
+    }
+
+    /// The flamegraph of document `id` under `profile` (the profile of the
+    /// snapshot it holds), and what the model could not read; or why there
+    /// is none, as a code (`engine-pending` while it may still come) and a
+    /// message.
+    pub async fn flamegraph(
+        &self,
+        id: &str,
+        profile: &render::flame::LineProfile,
+    ) -> Result<(render::flame::FlameGraph, Option<String>), (String, String)> {
+        let model = self.ready_model(id).await?;
+        Ok((render::flame::flamegraph(&model.ir, profile), model.partial))
+    }
+
+    /// The engine's model of document `id`, or why there is none (as a
+    /// code and a message).
+    async fn ready_model(&self, id: &str) -> Result<Model, (String, String)> {
+        let note = |code: &str, message: String| (code.to_string(), message);
+        let Some(text) = self.doc(id).await else {
+            return Err(note(
+                "unknown-document",
+                "This snapshot is no longer kept by the server; open the trace again.".into(),
+            ));
+        };
+        let dialects = match &*self.dialects.read().await {
+            Slot::Ready(d) => Arc::clone(d),
+            Slot::None => {
+                return Err(note(
+                    "no-dialects",
+                    "Choose a dialects folder: its dialect engine reads the IR for this view."
+                        .into(),
+                ));
+            }
+            Slot::Opening { .. } => {
+                return Err(note("engine-pending", "Starting pliron-lsp…".into()));
+            }
+            Slot::Error { message, .. } => return Err(note("dialects-error", message.clone())),
+        };
+        dialects
+            .model(id, &text)
+            .await
+            .map_err(|missing| match missing {
+                NoModel::Pending(message) => note("engine-pending", message),
+                NoModel::Failed(message) => note("no-model", message),
+            })
     }
 
     /// A language query on document `id`: `hover`, `definition`,

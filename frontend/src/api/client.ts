@@ -2,6 +2,7 @@ import type {
   DefinitionResult,
   DiagnosticsResult,
   DisplayCapabilities,
+  FlamegraphResponse,
   FolderListing,
   HistoryStep,
   HoverResult,
@@ -66,6 +67,11 @@ export function openTrace(filepath: string): Promise<OpenTraceResponse> {
 
 export function importTrace(filename: string, contents: string): Promise<OpenTraceResponse> {
   return post<OpenTraceResponse>("/api/traces/import", { filename, contents });
+}
+
+/** The flamegraph of snapshot `step` of a profiled trace (its IR is `id`). */
+export function profileFlamegraph(filepath: string, step: number, id: string): Promise<FlamegraphResponse> {
+  return post<FlamegraphResponse>("/api/profile/flamegraph", { filepath, step, id });
 }
 
 /** Step `step` of the trace's history (diff and blame), computed once. */

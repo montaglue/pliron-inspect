@@ -2,6 +2,7 @@ mod folders;
 mod history;
 mod line_diff;
 mod lsp;
+mod profile;
 mod render;
 mod server;
 mod session;
@@ -45,6 +46,7 @@ async fn main() -> anyhow::Result<()> {
         frontend_dir: args.frontend_dir,
         session: session::Session::new(),
         histories: Default::default(),
+        profiles: Default::default(),
     };
 
     let app = build_router(state);
