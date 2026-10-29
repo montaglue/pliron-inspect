@@ -11,6 +11,7 @@ use serde::Deserialize;
 
 pub mod cfg;
 pub mod flame;
+pub mod timeline;
 pub mod tree;
 
 pub const RENDER_PROTOCOL_VERSION: u32 = 1;

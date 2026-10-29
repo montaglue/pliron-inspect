@@ -2307,3 +2307,29 @@ button {
 .revealed-line {
   background: rgba(220, 220, 170, 0.22);
 }
+
+/* Timeline: what a profiled run executed when. */
+.timeline-view {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  background: #16181c;
+}
+
+.timeline-canvas {
+  position: relative;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 12px 16px;
+}
+
+.timeline-canvas canvas {
+  display: block;
+  cursor: grab;
+}
+
+.timeline-canvas canvas:active {
+  cursor: grabbing;
+}

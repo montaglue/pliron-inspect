@@ -233,6 +233,20 @@ impl Session {
         Ok((render::flame::flamegraph(&model.ir, profile), model.partial))
     }
 
+    /// The timeline of `samples` on document `id` (the snapshot the samples
+    /// name ops of), as [Self::flamegraph].
+    pub async fn timeline(
+        &self,
+        id: &str,
+        samples: &render::timeline::Samples<'_>,
+    ) -> Result<(render::timeline::Timeline, Option<String>), (String, String)> {
+        let model = self.ready_model(id).await?;
+        Ok((
+            render::timeline::timeline(&model.ir, samples),
+            model.partial,
+        ))
+    }
+
     /// The engine's model of document `id`, or why there is none (as a
     /// code and a message).
     async fn ready_model(&self, id: &str) -> Result<Model, (String, String)> {

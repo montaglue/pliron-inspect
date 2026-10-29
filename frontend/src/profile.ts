@@ -21,6 +21,9 @@ export type Bpgo = {
   metrics?: Record<string, string>;
   snapshots?: Record<string, OpEntry[]>;
   stops?: Record<string, { reached: number; pass?: string | null; reason: string }>;
+  /** The cycle samples one by one (kept by the server): the snapshot whose
+   * ops they hit, and how many there are. */
+  timeline?: { snapshot: number; samples: number };
 };
 
 export function bpgoOf(meta: TraceMeta | undefined | null): Bpgo | null {

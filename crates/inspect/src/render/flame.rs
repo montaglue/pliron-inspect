@@ -273,20 +273,20 @@ fn without_marker(text: &str) -> String {
 }
 
 /// The natural loops of a function's blocks.
-struct Loops {
-    loops: Vec<Loop>,
+pub(super) struct Loops {
+    pub(super) loops: Vec<Loop>,
     /// The innermost loop of each block in one.
-    innermost: HashMap<u32, usize>,
+    pub(super) innermost: HashMap<u32, usize>,
 }
 
-struct Loop {
-    header: u32,
+pub(super) struct Loop {
+    pub(super) header: u32,
     blocks: HashSet<u32>,
-    parent: Option<usize>,
+    pub(super) parent: Option<usize>,
 }
 
 impl Loops {
-    fn of(ir: &Ir, blocks: &[u32]) -> Loops {
+    pub(super) fn of(ir: &Ir, blocks: &[u32]) -> Loops {
         let model = ir.model();
         let index: HashMap<u32, usize> = blocks.iter().enumerate().map(|(i, &b)| (b, i)).collect();
         let successors: Vec<Vec<usize>> = blocks

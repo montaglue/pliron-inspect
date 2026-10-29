@@ -12,6 +12,7 @@ import type {
   RenderDocument,
   RenderRequest,
   SessionState,
+  TimelineResponse,
   TraceListResponse
 } from "./protocol";
 
@@ -72,6 +73,11 @@ export function importTrace(filename: string, contents: string): Promise<OpenTra
 /** The flamegraph of snapshot `step` of a profiled trace (its IR is `id`). */
 export function profileFlamegraph(filepath: string, step: number, id: string): Promise<FlamegraphResponse> {
   return post<FlamegraphResponse>("/api/profile/flamegraph", { filepath, step, id });
+}
+
+/** The timeline of a profiled trace's run (`id`: the IR its samples name). */
+export function profileTimeline(filepath: string, id: string): Promise<TimelineResponse> {
+  return post<TimelineResponse>("/api/profile/timeline", { filepath, id });
 }
 
 /** Step `step` of the trace's history (diff and blame), computed once. */

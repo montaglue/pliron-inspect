@@ -26,6 +26,7 @@ import { FolderIcon } from "./start/FolderPicker";
 import { StartView, engineLine } from "./start/StartView";
 import { CfgView } from "./views/CfgView";
 import { FlameGraphView } from "./views/FlameGraphView";
+import { TimelineView } from "./views/TimelineView";
 import { IrDiffView } from "./views/IrDiffView";
 import { TextView } from "./views/TextView";
 import { TreeView } from "./views/TreeView";
@@ -356,6 +357,18 @@ function Viewer({ session, onChangeFolders }: { session: SessionState; onChangeF
                 setActiveView("text");
               }}
             />
+          ) : activeView === "timeline" ? (
+            <TimelineView
+              tracePath={activeTrace?.filepath ?? ""}
+              snapshots={snapshots}
+              summary={bpgo?.timeline ?? null}
+              profiled={bpgo !== null}
+              onShowInText={(step, line) => {
+                setSnapshotStep(step);
+                setReveal({ line });
+                setActiveView("text");
+              }}
+            />
           ) : activeView === "cfg" ? (
             <CfgView
               document={document}
@@ -578,6 +591,8 @@ function ViewIcon({ view }: { view: ViewId }) {
       return <CfgIcon />;
     case "flamegraph":
       return <FlameIcon />;
+    case "timeline":
+      return <TimelineIcon />;
     case "tree":
       return <TreeIcon />;
     case "text":
@@ -615,6 +630,18 @@ function FlameIcon() {
       <path d="M5 15h14v4H5z" />
       <path d="M7 11h8v4H7z" />
       <path d="M9 7h4v4H9z" />
+    </SvgIcon>
+  );
+}
+
+function TimelineIcon() {
+  return (
+    <SvgIcon>
+      <path d="M3 6h18" />
+      <path d="M4 10h7v3H4z" />
+      <path d="M13 10h7v3h-7z" />
+      <path d="M6 15h4v3H6z" />
+      <path d="M14 15h3v3h-3z" />
     </SvgIcon>
   );
 }
@@ -741,6 +768,7 @@ const fallbackViews: Array<{ id: ViewId; label: string; description: string }> =
   { id: "ir-diff", label: "IR Diff", description: "Snapshot diff" },
   { id: "cfg", label: "CFG", description: "Control-flow graph of a function" },
   { id: "flamegraph", label: "Flamegraph", description: "Where a profiled run's cycles go: function, loop, block, op" },
+  { id: "timeline", label: "Timeline", description: "What a profiled run executed when" },
   { id: "tree", label: "Tree", description: "Operation hierarchy" },
   { id: "versions", label: "Versions", description: "Trace versions of the selected project" }
 ];

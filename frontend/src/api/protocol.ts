@@ -1,4 +1,4 @@
-export type ViewId = "ir-diff" | "cfg" | "flamegraph" | "tree" | "text" | "versions";
+export type ViewId = "ir-diff" | "cfg" | "flamegraph" | "timeline" | "tree" | "text" | "versions";
 
 export type DisplayCapabilities = {
   protocolVersion: number;
@@ -65,6 +65,22 @@ export type FlameGraph = { root: FlameNode; total: number };
 
 export type FlamegraphResponse =
   | { status: "ready"; graph: FlameGraph; partial?: string | null }
+  | { status: "pending" | "unavailable"; message: string };
+
+/** A run's samples as zones of what was running, one lane per level. */
+export type Timeline = {
+  /** From the first sample to the end of the last (ns). */
+  duration: number;
+  samples: number;
+  lanes: number;
+  places: Array<{ name: string; kind: "function" | "loop" | "block" | "other"; line?: number }>;
+  /** Column by column: zone `i` is `place[i]` on `lane[i]`, from `start[i]`
+   * to `end[i]` (ns), holding `samples[i]`. */
+  zones: { lane: number[]; start: number[]; end: number[]; place: number[]; samples: number[] };
+};
+
+export type TimelineResponse =
+  | { status: "ready"; timeline: Timeline; partial?: string | null }
   | { status: "pending" | "unavailable"; message: string };
 
 /** One step of a trace's history: snapshot `step` against the one before. */

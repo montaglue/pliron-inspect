@@ -14,6 +14,7 @@ use serde_json::json;
 
 use crate::history::Histories;
 use crate::profile::Profiles;
+use crate::render;
 use crate::session::Session;
 
 const PROTOCOL_VERSION: u32 = 1;
@@ -45,6 +46,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/traces/import", post(import_trace))
         .route("/api/history/step", post(history_step))
         .route("/api/profile/flamegraph", post(profile_flamegraph))
+        .route("/api/profile/timeline", post(profile_timeline))
         .route("/api/ir", post(add_ir))
         .route("/api/ir/render", post(render_ir))
         .route("/api/ir/{query}", post(ir_query))
@@ -81,6 +83,7 @@ async fn capabilities() -> impl IntoResponse {
                 "Flamegraph",
                 "Where a profiled run's cycles go: function, loop, block, op",
             ),
+            ViewCapability::new("timeline", "Timeline", "What a profiled run executed when"),
             ViewCapability::new("tree", "Tree", "Operation hierarchy"),
             ViewCapability::new(
                 "versions",
@@ -265,6 +268,55 @@ async fn profile_flamegraph(
     }
 }
 
+#[derive(serde::Deserialize)]
+struct TimelineRequest {
+    filepath: String,
+    /// The server's id of the IR of the snapshot the samples name ops of
+    /// (`bpgo.timeline.snapshot` of the trace's header).
+    id: String,
+}
+
+/// The timeline of a profiled trace's run: `{"status": "ready",
+/// "timeline", "partial"?}`, or `{"status": "pending" | "unavailable",
+/// "message"}`.
+async fn profile_timeline(
+    State(state): State<AppState>,
+    Json(req): Json<TimelineRequest>,
+) -> Response {
+    let path = match trace_in_folder(&state, &req.filepath).await {
+        Ok(path) => path,
+        Err(error) => return bad_request(error),
+    };
+    let samples = match state.profiles.timeline(&path).await {
+        Ok(Some(samples)) => samples,
+        Ok(None) => {
+            return Json(json!({
+                "status": "unavailable",
+                "message": "This trace was measured without sample times; measure it again with crabbit-bpgo for a timeline."
+            }))
+            .into_response();
+        }
+        Err(error) => return bad_request(format!("{error:#}")),
+    };
+    let view = render::timeline::Samples {
+        time: &samples.time,
+        line: &samples.line,
+    };
+    match state.session.timeline(&req.id, &view).await {
+        Ok((timeline, partial)) => Json(json!({
+            "status": "ready",
+            "timeline": timeline,
+            "partial": partial
+        }))
+        .into_response(),
+        Err((code, message)) => Json(json!({
+            "status": if code == "engine-pending" { "pending" } else { "unavailable" },
+            "message": message
+        }))
+        .into_response(),
+    }
+}
+
 /// Save an uploaded trace into the traces folder (in its project's
 /// subfolder) and open it.
 async fn import_trace(
@@ -317,6 +369,20 @@ fn trace_response(path: PathBuf, trace: trace::CrabbitTraceFile) -> Response {
         .to_string_lossy()
         .to_string();
     let pipeline = trace.meta.pipeline.clone();
+    let mut meta = trace.meta;
+    // The samples one by one stay on the server (the timeline view asks for
+    // them); the page gets which snapshot they name and how many there are.
+    if let Some(timeline) = meta
+        .extra
+        .get_mut("bpgo")
+        .and_then(|bpgo| bpgo.get_mut("timeline"))
+    {
+        let samples = timeline
+            .get("time")
+            .and_then(|time| time.as_array())
+            .map_or(0, Vec::len);
+        *timeline = json!({ "snapshot": timeline.get("snapshot"), "samples": samples });
+    }
     let snapshots = trace
         .ir_dumps
         .iter()
@@ -329,7 +395,7 @@ fn trace_response(path: PathBuf, trace: trace::CrabbitTraceFile) -> Response {
     Json(OpenTraceResponse {
         filepath: path.to_string_lossy().to_string(),
         filename,
-        meta: trace.meta,
+        meta,
         snapshots,
         pipeline,
     })
