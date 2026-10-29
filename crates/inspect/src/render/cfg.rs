@@ -1,188 +1,46 @@
-//! Semantic CFG render documents for display tooling.
+//! The CFG view: the blocks of one function-like op, with nested regions
+//! drawn inside the block of the op that holds them.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use flowblocks::{Cfg, ControlEdgeId, EdgeKind as FlowEdgeKind};
-use serde::{Deserialize, Serialize};
+use pliron_inspect_protocol::types::{
+    Entity, EntityKind, GraphDocument, GraphEdge, GraphEdgeLayout, GraphLayout, GraphNode,
+    GraphNodeLayout, GraphPoint, RenderDocument,
+};
+use pliron_lsp_protocol::op_traits;
 use serde_json::json;
 
-use crate::{
-    FunctionLikeInterface,
-    common_traits::Named,
-    context::{Context, Ptr},
-    ir::{basic_block::BasicBlock, op::op_cast, operation::Operation, region::Region},
-    linked_list::ContainsLinkedList,
-    printable::Printable,
+use super::{
+    Ir, RENDER_PROTOCOL_VERSION, block_entity_id, diagnostic_document, op_entity_id,
+    region_entity_id,
 };
 
-pub const RENDER_PROTOCOL_VERSION: u32 = 1;
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct RenderDocument {
-    pub version: u32,
-    pub view: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    pub snapshot_id: String,
-    pub entities: Vec<Entity>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub graph: Option<GraphDocument>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tree: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub text: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub diagnostics: Vec<Diagnostic>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct Entity {
-    pub id: String,
-    pub kind: EntityKind,
-    pub label: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub interfaces: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_span: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub attrs: BTreeMap<String, serde_json::Value>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "kebab-case")]
-pub enum EntityKind {
-    Operation,
-    Region,
-    Block,
-    Value,
-    Type,
-    Attribute,
-    Interface,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct GraphDocument {
-    pub nodes: Vec<GraphNode>,
-    pub edges: Vec<GraphEdge>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub roots: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub layout: Option<GraphLayout>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct GraphNode {
-    pub id: String,
-    pub entity_id: String,
-    pub kind: String,
-    pub label: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_id: Option<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub attrs: BTreeMap<String, serde_json::Value>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct GraphEdge {
-    pub id: String,
-    pub from: String,
-    pub to: String,
-    pub kind: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub attrs: BTreeMap<String, serde_json::Value>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct GraphLayout {
-    pub engine: String,
-    pub width: f32,
-    pub height: f32,
-    pub nodes: Vec<GraphNodeLayout>,
-    pub edges: Vec<GraphEdgeLayout>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct GraphNodeLayout {
-    pub node_id: String,
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-    pub rank: usize,
-    pub column: usize,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct GraphEdgeLayout {
-    pub edge_id: String,
-    pub points: Vec<GraphPoint>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
-#[serde(rename_all = "camelCase")]
-pub struct GraphPoint {
-    pub x: f32,
-    pub y: f32,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct Diagnostic {
-    pub severity: DiagnosticSeverity,
-    pub code: String,
-    pub message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub entity_id: Option<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub attrs: BTreeMap<String, serde_json::Value>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "kebab-case")]
-pub enum DiagnosticSeverity {
-    Info,
-    Warning,
-    Error,
-}
-
+/// An op whose CFG can be shown: a symbol (`@f`) with a body, other than a
+/// symbol table (a module).
 struct FunctionRoot {
     entity_id: String,
-    op: Ptr<Operation>,
-    body: Ptr<Region>,
+    op: u32,
+    body: u32,
     label: String,
-    detail: String,
 }
 
 struct PendingCfgEdge {
-    from: Ptr<BasicBlock>,
-    to: Ptr<BasicBlock>,
+    from: u32,
+    to: u32,
     label: Option<String>,
     terminator_opid: String,
     successor_index: usize,
 }
 
 struct CfgBuilder<'a> {
-    ctx: &'a Context,
+    ir: &'a Ir,
     entities: Vec<Entity>,
     seen_entities: HashSet<String>,
     nodes: Vec<GraphNode>,
     edges: Vec<GraphEdge>,
-    block_nodes: HashMap<Ptr<BasicBlock>, String>,
-    block_order: HashMap<Ptr<BasicBlock>, usize>,
+    block_nodes: HashMap<u32, String>,
+    block_order: HashMap<u32, usize>,
     pending_edges: Vec<PendingCfgEdge>,
 }
 
@@ -194,10 +52,10 @@ const GROUP_MIN_HEIGHT: f32 = 190.0;
 const GRAPH_MARGIN: f32 = 48.0;
 
 impl<'a> CfgBuilder<'a> {
-    fn new(ctx: &'a Context, entities: Vec<Entity>) -> Self {
+    fn new(ir: &'a Ir, entities: Vec<Entity>) -> Self {
         let seen_entities = entities.iter().map(|entity| entity.id.clone()).collect();
         Self {
-            ctx,
+            ir,
             entities,
             seen_entities,
             nodes: Vec::new(),
@@ -252,47 +110,40 @@ impl<'a> CfgBuilder<'a> {
 
     fn build_region(
         &mut self,
-        region: Ptr<Region>,
+        region: u32,
         parent_id: Option<String>,
         depth: usize,
     ) -> Vec<String> {
-        region
-            .deref(self.ctx)
-            .iter(self.ctx)
+        self.ir.model().regions[region as usize]
+            .blocks
+            .clone()
+            .into_iter()
             .map(|block| self.block(block, parent_id.clone(), depth))
             .collect()
     }
 
-    fn block(&mut self, block: Ptr<BasicBlock>, parent_id: Option<String>, depth: usize) -> String {
+    fn block(&mut self, block: u32, parent_id: Option<String>, depth: usize) -> String {
         if let Some(id) = self.block_nodes.get(&block) {
             return id.clone();
         }
 
-        let (label, args, ops, succ_count) = {
-            let block_ref = block.deref(self.ctx);
-            (
-                format!("^{}", block_ref.unique_name(self.ctx)),
-                block_ref
-                    .arguments()
-                    .map(|arg| arg.disp(self.ctx).to_string())
-                    .collect::<Vec<_>>(),
-                block_ref.iter(self.ctx).collect::<Vec<_>>(),
-                block_ref.succs(self.ctx).len(),
-            )
-        };
+        let info = &self.ir.model().blocks[block as usize];
+        let label = self.ir.block_label(block);
+        let args = info
+            .args
+            .iter()
+            .map(|arg| self.ir.value_name(*arg))
+            .collect::<Vec<_>>();
+        let ops = info.ops.clone();
+        let succ_count = ops
+            .last()
+            .map_or(0, |op| self.ir.model().ops[*op as usize].successors.len());
 
         let mut operation_text = Vec::new();
         let mut nested_ops = Vec::new();
         for op in ops {
-            let (opid, successors, has_regions) = {
-                let op_ref = op.deref(self.ctx);
-                (
-                    Operation::get_opid(op, self.ctx).disp(self.ctx).to_string(),
-                    op_ref.successors().collect::<Vec<_>>(),
-                    op_has_non_empty_regions(self.ctx, op),
-                )
-            };
-
+            let opid = self.ir.opid(op).to_string();
+            let successors = self.ir.model().ops[op as usize].successors.clone();
             for (successor_index, succ) in successors.iter().copied().enumerate() {
                 self.pending_edges.push(PendingCfgEdge {
                     from: block,
@@ -303,11 +154,11 @@ impl<'a> CfgBuilder<'a> {
                 });
             }
 
-            if has_regions {
+            if self.ir.op_has_blocks(op) {
                 operation_text.push(format!("{opid} <nested region>"));
                 nested_ops.push(op);
             } else {
-                operation_text.extend(print_inline_op(self.ctx, op));
+                operation_text.extend(self.ir.op_lines(op));
             }
         }
 
@@ -354,21 +205,9 @@ impl<'a> CfgBuilder<'a> {
         node_id
     }
 
-    fn nested_op(&mut self, op: Ptr<Operation>, parent_id: String, depth: usize) -> String {
-        let (opid, regions, first_line) = {
-            let op_ref = op.deref(self.ctx);
-            (
-                Operation::get_opid(op, self.ctx).disp(self.ctx).to_string(),
-                op_ref.regions().collect::<Vec<_>>(),
-                op.disp(self.ctx)
-                    .to_string()
-                    .lines()
-                    .next()
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string(),
-            )
-        };
+    fn nested_op(&mut self, op: u32, parent_id: String, depth: usize) -> String {
+        let opid = self.ir.opid(op).to_string();
+        let first_line = self.ir.op_first_line(op);
 
         let entity_id = op_entity_id(op);
         self.push_entity(Entity {
@@ -387,10 +226,11 @@ impl<'a> CfgBuilder<'a> {
         });
 
         let node_id = format!("node:nested:{entity_id}");
-        let non_empty_regions = regions
+        let non_empty_regions = self.ir.model().ops[op as usize]
+            .regions
             .iter()
             .copied()
-            .filter(|region| region_has_blocks(self.ctx, *region))
+            .filter(|region| self.ir.region_has_blocks(*region))
             .collect::<Vec<_>>();
 
         let mut attrs = BTreeMap::new();
@@ -428,7 +268,7 @@ impl<'a> CfgBuilder<'a> {
 
     fn region_group(
         &mut self,
-        region: Ptr<Region>,
+        region: u32,
         region_index: usize,
         parent_id: String,
         depth: usize,
@@ -674,25 +514,26 @@ fn graph_node_size(node: &GraphNode) -> (f32, f32) {
     (BLOCK_WIDTH, height)
 }
 
-pub fn build_cfg_render_document(
-    ctx: &Context,
-    root: Ptr<Operation>,
+/// The CFG of the function `requested_root` (an entity id from an earlier
+/// document, or a label like `@f`), else of the first function.
+pub fn cfg_document(
+    ir: &Ir,
     snapshot_id: impl Into<String>,
-    requested_root_id: Option<&str>,
+    requested_root: Option<&str>,
 ) -> RenderDocument {
     let snapshot_id = snapshot_id.into();
-    let function_roots = discover_function_roots(ctx, root);
+    let function_roots = discover_function_roots(ir);
     if function_roots.is_empty() {
         return diagnostic_document(
             "cfg",
             snapshot_id,
-            "CFG render",
+            "CFG",
             "no-function-roots",
-            "No operations implementing FunctionLikeInterface with a body were found.",
+            "No symbol op with a body (such as a function) was found.",
         );
     }
 
-    let selected_index = requested_root_id
+    let selected_index = requested_root
         .and_then(|root_id| {
             function_roots
                 .iter()
@@ -704,21 +545,22 @@ pub fn build_cfg_render_document(
     let mut root_entities = Vec::new();
     for (index, root) in function_roots.iter().enumerate() {
         let mut attrs = BTreeMap::new();
+        attrs.insert("cfgRoot".to_string(), json!(true));
         attrs.insert("rootId".to_string(), json!(root.entity_id));
         attrs.insert("selected".to_string(), json!(index == selected_index));
-        attrs.insert("opId".to_string(), json!(root_opid(ctx, root.op)));
+        attrs.insert("opId".to_string(), json!(ir.opid(root.op)));
         root_entities.push(Entity {
             id: root.entity_id.clone(),
             kind: EntityKind::Operation,
             label: root.label.clone(),
-            detail: Some(root.detail.clone()),
-            interfaces: vec!["FunctionLikeInterface".to_string()],
+            detail: Some(ir.opid(root.op).to_string()),
+            interfaces: Vec::new(),
             source_span: None,
             attrs,
         });
     }
 
-    let mut builder = CfgBuilder::new(ctx, root_entities);
+    let mut builder = CfgBuilder::new(ir, root_entities);
     let root_node_ids = builder.build_region(selected.body, None, 0);
     let (entities, graph) = builder.finish(root_node_ids);
 
@@ -730,99 +572,44 @@ pub fn build_cfg_render_document(
         entities,
         graph: Some(graph),
         tree: None,
-        text: None,
         diagnostics: Vec::new(),
     }
 }
 
-pub fn diagnostic_document(
-    view: impl Into<String>,
-    snapshot_id: impl Into<String>,
-    title: impl Into<String>,
-    code: impl Into<String>,
-    message: impl Into<String>,
-) -> RenderDocument {
-    RenderDocument {
-        version: RENDER_PROTOCOL_VERSION,
-        view: view.into(),
-        title: Some(title.into()),
-        snapshot_id: snapshot_id.into(),
-        entities: Vec::new(),
-        graph: None,
-        tree: None,
-        text: None,
-        diagnostics: vec![Diagnostic {
-            severity: DiagnosticSeverity::Error,
-            code: code.into(),
-            message: message.into(),
-            entity_id: None,
-            attrs: BTreeMap::new(),
-        }],
-    }
-}
-
-fn discover_function_roots(ctx: &Context, root: Ptr<Operation>) -> Vec<FunctionRoot> {
+/// Function roots in document order. Their ids are their symbols, so the
+/// selected function stays selected across the snapshots of a trace.
+fn discover_function_roots(ir: &Ir) -> Vec<FunctionRoot> {
     let mut roots = Vec::new();
-    collect_function_roots(ctx, root, &mut roots);
-    roots
-}
-
-fn collect_function_roots(ctx: &Context, op: Ptr<Operation>, roots: &mut Vec<FunctionRoot>) {
-    {
-        let op_obj = Operation::get_op_dyn(op, ctx);
-        // Preferred: an explicit FunctionLikeInterface impl. Fallback: any
-        // symbol-carrying op with a non-empty region — dialects (machine
-        // IR, imported MIR) whose crates cannot implement the foreign
-        // trait (orphan rule) still get CFG/Tree roots this way.
-        let root = if let Some(function_like) = op_cast::<dyn FunctionLikeInterface>(&*op_obj) {
-            function_like.body_region(ctx).map(|body| (body, function_like.display_name(ctx)))
-        } else if let Some(symbol) =
-            op_cast::<dyn pliron::builtin::op_interfaces::SymbolOpInterface>(&*op_obj)
+    let mut seen = HashMap::<String, usize>::new();
+    let mut stack = vec![ir.model().root];
+    while let Some(op) = stack.pop() {
+        let info = &ir.model().ops[op as usize];
+        if let (Some(symbol), Some(&body)) = (&info.symbol, info.regions.first())
+            && info.traits & op_traits::SYMBOL_TABLE == 0
+            && ir.region_has_blocks(body)
         {
-            op.deref(ctx)
-                .regions()
-                .next()
-                .map(|body| (body, format!("@{}", symbol.get_symbol_name(ctx))))
-        } else {
-            None
-        };
-        if let Some((body, label)) = root
-            && region_has_blocks(ctx, body)
-        {
+            let label = format!("@{symbol}");
+            let count = seen.entry(label.clone()).or_default();
+            *count += 1;
+            let entity_id = match *count {
+                1 => format!("fn:{label}"),
+                n => format!("fn:{label}#{n}"),
+            };
             roots.push(FunctionRoot {
-                entity_id: op_entity_id(op),
+                entity_id,
                 op,
                 body,
                 label,
-                detail: Operation::get_opid(op, ctx).disp(ctx).to_string(),
             });
         }
-    }
-
-    let regions = op.deref(ctx).regions().collect::<Vec<_>>();
-    for region in regions {
-        let blocks = region.deref(ctx).iter(ctx).collect::<Vec<_>>();
-        for block in blocks {
-            let ops = block.deref(ctx).iter(ctx).collect::<Vec<_>>();
-            for nested_op in ops {
-                collect_function_roots(ctx, nested_op, roots);
+        // Children in reverse, so they pop in document order.
+        for region in info.regions.iter().rev() {
+            for block in ir.model().regions[*region as usize].blocks.iter().rev() {
+                stack.extend(ir.model().blocks[*block as usize].ops.iter().rev());
             }
         }
     }
-}
-
-fn op_has_non_empty_regions(ctx: &Context, op: Ptr<Operation>) -> bool {
-    op.deref(ctx)
-        .regions()
-        .any(|region| region_has_blocks(ctx, region))
-}
-
-fn region_has_blocks(ctx: &Context, region: Ptr<Region>) -> bool {
-    region.deref(ctx).get_head().is_some()
-}
-
-fn root_opid(ctx: &Context, op: Ptr<Operation>) -> String {
-    Operation::get_opid(op, ctx).disp(ctx).to_string()
+    roots
 }
 
 fn edge_label(opid: &str, successor_count: usize, successor_index: usize) -> Option<String> {
@@ -837,23 +624,54 @@ fn successors_label_is_ambiguous(opid: &str) -> bool {
     opid.contains("cond") || opid.contains("switch")
 }
 
-fn print_inline_op(ctx: &Context, op: Ptr<Operation>) -> Vec<String> {
-    op.disp(ctx)
-        .to_string()
-        .lines()
-        .map(|line| line.trim().to_string())
-        .filter(|line| !line.is_empty())
-        .collect()
-}
+#[cfg(test)]
+mod tests {
+    use super::super::tests::diamond;
+    use super::*;
 
-fn op_entity_id(op: Ptr<Operation>) -> String {
-    format!("op:{op:?}")
-}
+    #[test]
+    fn diamond_cfg_of_the_function_not_the_module() {
+        let doc = cfg_document(&diamond(), "s", None);
+        assert!(doc.diagnostics.is_empty(), "{:?}", doc.diagnostics);
+        assert_eq!(doc.title.as_deref(), Some("CFG: @f"));
+        let roots: Vec<_> = doc
+            .entities
+            .iter()
+            .filter(|e| e.attrs.contains_key("cfgRoot"))
+            .map(|e| e.id.as_str())
+            .collect();
+        assert_eq!(roots, ["fn:@f"]);
 
-fn block_entity_id(block: Ptr<BasicBlock>) -> String {
-    format!("block:{block:?}")
-}
+        let graph = doc.graph.unwrap();
+        let labels: Vec<_> = graph.nodes.iter().map(|n| n.label.as_str()).collect();
+        assert_eq!(labels, ["^entry", "^a", "^b", "^exit"]);
+        assert_eq!(graph.nodes[0].attrs["blockArgs"], json!(["x"]));
+        assert_eq!(
+            graph.nodes[0].attrs["operationText"],
+            json!(["llvm.cond_br if x ^a() else ^b()"])
+        );
+        let edges: Vec<_> = graph
+            .edges
+            .iter()
+            .map(|e| (e.from.as_str(), e.to.as_str(), e.label.as_deref()))
+            .collect();
+        assert_eq!(
+            edges,
+            [
+                ("node:block:1", "node:block:2", Some("#0")),
+                ("node:block:1", "node:block:3", Some("#1")),
+                ("node:block:2", "node:block:4", None),
+                ("node:block:3", "node:block:4", None),
+            ]
+        );
+        assert!(graph.layout.is_some());
+    }
 
-fn region_entity_id(region: Ptr<Region>) -> String {
-    format!("region:{region:?}")
+    #[test]
+    fn a_function_is_selected_by_its_symbol() {
+        let doc = cfg_document(&diamond(), "s", Some("fn:@f"));
+        assert_eq!(doc.title.as_deref(), Some("CFG: @f"));
+        let doc = cfg_document(&diamond(), "s", Some("@f"));
+        assert_eq!(doc.title.as_deref(), Some("CFG: @f"));
+    }
 }

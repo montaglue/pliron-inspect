@@ -1,61 +1,134 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
-import { getCapabilities, getTraces, importTrace, openTrace, renderDocument } from "./api/client";
-import type { DisplayCapabilities, OpenTraceResponse, RenderDocument, TraceListResponse, TraceSnapshot, ViewId } from "./api/protocol";
+import {
+  addIr,
+  closeDialects,
+  getCapabilities,
+  getState,
+  getTraces,
+  importTrace,
+  openDialects,
+  openTrace,
+  renderDocument,
+  setTracesFolder
+} from "./api/client";
+import type {
+  DisplayCapabilities,
+  OpenTraceResponse,
+  RenderDocument,
+  SessionState,
+  TraceListResponse,
+  TraceSnapshot,
+  ViewId
+} from "./api/protocol";
+import { FolderIcon } from "./start/FolderPicker";
+import { StartView, engineLine } from "./start/StartView";
 import { CfgView } from "./views/CfgView";
 import { IrDiffView } from "./views/IrDiffView";
 import { TextView } from "./views/TextView";
 import { TreeView } from "./views/TreeView";
-import { VersionsView, type ProjectRow, type VersionRow } from "./views/VersionsView";
+import { VersionsView, type ProjectRow } from "./views/VersionsView";
 
-const sampleSnapshots: TraceSnapshot[] = [
-  {
-    label: "initial",
-    ir: `builtin.module {
-  llvm.func @main() {
-  ^entry:
-    %0 = llvm.mlir.constant(1) : builtin.integeri32
-    llvm.return
-  }
-}`
-  },
-  {
-    label: "convert-arith-to-llvm",
-    ir: `builtin.module {
-  llvm.func @main() {
-  ^entry:
-    %0 = llvm.mlir.constant(1) : builtin.integeri32
-    %1 = llvm.mlir.constant(41) : builtin.integeri32
-    %2 = llvm.add %0, %1 : builtin.integeri32
-    llvm.return
-  }
-}`
-  },
-  {
-    label: "lower-cf",
-    ir: `builtin.module {
-  llvm.func @main() {
-  ^entry:
-    %0 = llvm.mlir.constant(1) : builtin.integeri32
-    %1 = llvm.mlir.constant(41) : builtin.integeri32
-    %2 = llvm.add %0, %1 : builtin.integeri32
-    llvm.br ^exit
-  ^exit:
-    llvm.return
-  }
-}`
-  }
-];
+const SAVED_DIALECTS = "pliron-inspect.dialects";
+const SAVED_TRACES = "pliron-inspect.traces";
 
-const samplePipeline = [
-  "verify",
-  "convert-arith-to-llvm",
-  "convert-cf-to-llvm",
-  "lower-llvm-block-args-to-phi"
-];
+function saved(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
 
+function save(key: string, value: string | null) {
+  try {
+    if (value === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+  } catch {
+    // Storage may be unavailable (private windows); the choice just is not remembered.
+  }
+}
+
+/** The dialect engine is changing state: poll the server more often. */
+function engineBusy(session: SessionState | null) {
+  const state = session?.dialects?.state;
+  return state === "starting" || state === "building";
+}
 
 export function App() {
+  const [session, setSession] = useState<SessionState | null>(null);
+  const [screen, setScreen] = useState<"start" | "viewer">("start");
+  const [bootError, setBootError] = useState<string | null>(null);
+
+  // Reopen the folders chosen last time in this browser (the server may
+  // have restarted since).
+  useEffect(() => {
+    (async () => {
+      let state = await getState();
+      const dialects = saved(SAVED_DIALECTS);
+      if (!state.dialects && dialects) {
+        state = await openDialects(dialects).catch(() => {
+          save(SAVED_DIALECTS, null);
+          return state;
+        });
+      }
+      const traces = saved(SAVED_TRACES);
+      if (!state.traces && traces) {
+        state = await setTracesFolder(traces).catch(() => {
+          save(SAVED_TRACES, null);
+          return state;
+        });
+      }
+      setSession(state);
+      setScreen(state.traces ? "viewer" : "start");
+    })().catch((err: unknown) => setBootError(err instanceof Error ? err.message : String(err)));
+  }, []);
+
+  const refresh = useCallback(() => {
+    getState()
+      .then(setSession)
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (!session) return;
+    const timer = window.setTimeout(refresh, engineBusy(session) ? 1500 : 10000);
+    return () => window.clearTimeout(timer);
+  }, [session, refresh]);
+
+  if (bootError) {
+    return <div className="boot-state bad">Cannot reach the pliron-inspect server: {bootError}</div>;
+  }
+  if (!session) {
+    return <div className="boot-state">Connecting…</div>;
+  }
+
+  if (screen === "start") {
+    return (
+      <StartView
+        session={session}
+        remembered={{ dialects: saved(SAVED_DIALECTS), traces: saved(SAVED_TRACES) }}
+        onDialects={async (path) => {
+          setSession(await openDialects(path));
+          save(SAVED_DIALECTS, path);
+        }}
+        onCloseDialects={async () => {
+          setSession(await closeDialects());
+          save(SAVED_DIALECTS, null);
+        }}
+        onTraces={async (path) => {
+          setSession(await setTracesFolder(path));
+          save(SAVED_TRACES, path);
+        }}
+        onContinue={() => setScreen("viewer")}
+      />
+    );
+  }
+
+  return <Viewer key={session.traces ?? ""} session={session} onChangeFolders={() => setScreen("start")} />;
+}
+
+function Viewer({ session, onChangeFolders }: { session: SessionState; onChangeFolders: () => void }) {
   const [capabilities, setCapabilities] = useState<DisplayCapabilities | null>(null);
   const [activeView, setActiveView] = useState<ViewId>("text");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -66,9 +139,10 @@ export function App() {
   const [activeTrace, setActiveTrace] = useState<OpenTraceResponse | null>(null);
   const [snapshots, setSnapshots] = useState<TraceSnapshot[]>([]);
   const [snapshotStep, setSnapshotStep] = useState(0);
-  const [pipeline, setPipeline] = useState<string[]>(samplePipeline);
+  const [irId, setIrId] = useState<string | null>(null);
   const [tracesLoading, setTracesLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const engineState = session.dialects?.state ?? null;
 
   useEffect(() => {
     getCapabilities()
@@ -91,34 +165,52 @@ export function App() {
     refreshTraces();
   }, []);
 
+  // The server keeps the snapshot shown; the views and the text view's
+  // language features refer to it by id.
+  const snapshotText = snapshots[snapshotStep]?.ir ?? null;
   useEffect(() => {
-    if (activeView === "text" || activeView === "ir-diff" || activeView === "versions") {
+    setIrId(null);
+    if (snapshotText === null) return;
+    let live = true;
+    addIr(snapshotText)
+      .then((id) => live && setIrId(id))
+      .catch((err: unknown) => live && setError(err instanceof Error ? err.message : String(err)));
+    return () => {
+      live = false;
+    };
+  }, [snapshotText]);
+
+  useEffect(() => {
+    if (activeView !== "cfg" && activeView !== "tree") {
       setDocument(null);
       return;
     }
-
-    renderDocument({
-      view: activeView,
-      snapshotId: activeTrace?.filepath ?? "none",
-      rootId: activeView === "cfg" ? cfgRootId : undefined,
-      text: snapshots[snapshotStep]?.ir ?? snapshots[snapshots.length - 1]?.ir ?? "",
-      options: { language: "crabbit-ir" }
-    })
-      .then((doc) => {
-        setDocument(doc);
-        setError(null);
-      })
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
-  }, [activeTrace?.filepath, activeView, cfgRootId, snapshots, snapshotStep]);
+    if (!irId) return;
+    let live = true;
+    let timer: number | undefined;
+    const render = () =>
+      renderDocument({ id: irId, view: activeView, rootId: activeView === "cfg" ? cfgRootId : undefined })
+        .then((doc) => {
+          if (!live) return;
+          setDocument(doc);
+          setError(null);
+          // While the dialect engine builds or reads the IR, ask again.
+          if (doc.diagnostics?.some((diagnostic) => diagnostic.code === "engine-pending")) {
+            timer = window.setTimeout(render, 1500);
+          }
+        })
+        .catch((err: unknown) => live && setError(err instanceof Error ? err.message : String(err)));
+    render();
+    return () => {
+      live = false;
+      window.clearTimeout(timer);
+    };
+  }, [irId, activeView, cfgRootId, engineState]);
 
   const activateTrace = (trace: OpenTraceResponse, project?: string) => {
     setActiveTrace(trace);
     setSnapshots(trace.snapshots);
     setSnapshotStep(trace.snapshots.length > 0 ? trace.snapshots.length - 1 : 0);
-    setCfgRootId(undefined);
-    if (trace.pipeline.length > 0) {
-      setPipeline(trace.pipeline);
-    }
     setError(null);
     return getTraces().then((list) => {
       setTraceList(list);
@@ -153,6 +245,7 @@ export function App() {
 
   const projectRows = traceList ? projectRowsFromList(traceList) : [];
   const selectedProjectRow = projectRows.find((project) => project.name === selectedProject) ?? null;
+  const pipeline = activeTrace?.pipeline ?? [];
 
   return (
     <main className={sidebarCollapsed ? "app-shell sidebar-collapsed" : "app-shell"}>
@@ -160,7 +253,7 @@ export function App() {
         <div className="brand">
           <div className="brand-copy">
             <div className="brand-title">pliron-inspect</div>
-            <div className="brand-subtitle">Render-document prototype</div>
+            <div className="brand-subtitle">pliron compiler traces</div>
           </div>
           <button
             className="sidebar-toggle"
@@ -173,6 +266,8 @@ export function App() {
           </button>
         </div>
 
+        <FoldersPanel session={session} onChange={onChangeFolders} />
+
         <nav className="view-list" aria-label="Views">
           {(capabilities?.views ?? fallbackViews).map((view) => (
             <button
@@ -180,11 +275,10 @@ export function App() {
               key={view.id}
               type="button"
               onClick={() => setActiveView(view.id)}
-              title={view.label}
+              title={view.description}
             >
               <ViewIcon view={view.id} />
               <span className="view-label">{view.label}</span>
-              <small>{view.id}</small>
             </button>
           ))}
         </nav>
@@ -198,7 +292,12 @@ export function App() {
           projects={projectRows}
           selectedProject={selectedProject}
         />
-        <PipelinePanel passes={pipeline} />
+        <PipelinePanel
+          passes={pipeline}
+          snapshots={snapshots}
+          step={snapshotStep}
+          onSelect={(step) => setSnapshotStep(step)}
+        />
       </aside>
 
       <section className="workspace">
@@ -206,7 +305,13 @@ export function App() {
           {error ? <div className="error-banner">{error}</div> : null}
 
           {activeView === "text" ? (
-            <TextView snapshots={snapshots} step={snapshotStep} onStepChange={setSnapshotStep} />
+            <TextView
+              snapshots={snapshots}
+              step={snapshotStep}
+              onStepChange={setSnapshotStep}
+              irId={irId}
+              engineState={engineState}
+            />
           ) : activeView === "ir-diff" ? (
             snapshots.length > 0 ? (
               <IrDiffView snapshots={snapshots} />
@@ -223,26 +328,53 @@ export function App() {
               onOpenVersion={(filepath) => openTraceFile(filepath, selectedProjectRow?.name)}
               project={selectedProjectRow}
             />
+          ) : snapshots.length === 0 ? (
+            <div className="no-trace-state">
+              <TraceIcon />
+              <span>Select a trace to inspect IR snapshots</span>
+            </div>
           ) : activeView === "cfg" ? (
-            <CfgView document={document} rootId={cfgRootId} onSelectRoot={setCfgRootId} />
-          ) : activeView === "tree" ? (
-            <TreeView document={document} />
+            <CfgView
+              document={document}
+              rootId={cfgRootId}
+              onSelectRoot={setCfgRootId}
+              snapshot={snapshotLabel(snapshots, snapshotStep)}
+            />
           ) : (
-            <section className="content-grid">
-              <article className="panel">
-                <h2>Document</h2>
-                <pre>{JSON.stringify(document, null, 2)}</pre>
-              </article>
-
-              <article className="panel">
-                <h2>Renderer Target</h2>
-                <RendererPreview document={document} />
-              </article>
-            </section>
+            <TreeView document={document} snapshot={snapshotLabel(snapshots, snapshotStep)} />
           )}
         </div>
       </section>
     </main>
+  );
+}
+
+function snapshotLabel(snapshots: TraceSnapshot[], step: number) {
+  const snapshot = snapshots[step];
+  if (!snapshot) return undefined;
+  return `${step === 0 ? "initial" : snapshot.label} (${step + 1}/${snapshots.length})`;
+}
+
+/** The chosen folders, and the way back to the start page. */
+function FoldersPanel({ session, onChange }: { session: SessionState; onChange: () => void }) {
+  const dialects = session.dialects;
+  const engine = dialects ? engineLine(dialects.state, dialects.message) : null;
+  const name = (path: string | null | undefined) => (path ? path.split("/").filter(Boolean).pop() : null);
+  return (
+    <button className="folders-panel" type="button" onClick={onChange} title="Change the folders">
+      <span className="folders-row" title={dialects?.root}>
+        <FolderIcon />
+        <span className="folders-label">Dialects</span>
+        <span className="folders-name">{name(dialects?.root) ?? "none"}</span>
+        <span className={`engine-dot ${engine?.tone ?? "off"}`} title={engine?.text ?? "No dialects folder"} />
+      </span>
+      <span className="folders-row" title={session.traces ?? undefined}>
+        <TraceIcon />
+        <span className="folders-label">Traces</span>
+        <span className="folders-name">{name(session.traces) ?? "none"}</span>
+      </span>
+      <span className="folders-change">Change folders…</span>
+    </button>
   );
 }
 
@@ -289,7 +421,7 @@ function TracePanel({
             type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={loading}
-            title="Import .crt trace"
+            title="Import a .crt trace into the traces folder"
           >
             <FolderPlusIcon />
           </button>
@@ -312,7 +444,7 @@ function TracePanel({
       </div>
 
       <div className="trace-list">
-        {projects.length === 0 ? <div className="trace-empty">No trace projects found</div> : null}
+        {projects.length === 0 ? <div className="trace-empty">No traces in this folder</div> : null}
         {projects.map((project) => (
           <button
             className={project.name === selectedProject ? "trace-row selected" : "trace-row"}
@@ -331,7 +463,20 @@ function TracePanel({
   );
 }
 
-function PipelinePanel({ passes }: { passes: string[] }) {
+/** The trace's passes; a pass shows the IR after it. */
+function PipelinePanel({
+  passes,
+  snapshots,
+  step,
+  onSelect
+}: {
+  passes: string[];
+  snapshots: TraceSnapshot[];
+  step: number;
+  onSelect: (step: number) => void;
+}) {
+  // Snapshot 0 is the input; snapshot i + 1 is the IR after pass i.
+  const aligned = snapshots.length === passes.length + 1;
   return (
     <section className="pipeline-panel" aria-label="Pass pipeline">
       <div className="pipeline-header">
@@ -339,82 +484,44 @@ function PipelinePanel({ passes }: { passes: string[] }) {
           <PipelineIcon />
           <span>Pipeline</span>
         </div>
-        <span className="pipeline-lock" title="Locked">
-          <LockIcon />
-        </span>
+        <span className="pipeline-count">{passes.length || ""}</span>
       </div>
 
-      <div className="pipeline-list" aria-disabled="true">
+      <div className="pipeline-list">
         {passes.length === 0 ? <div className="pipeline-empty">No pipeline recorded</div> : null}
         {passes.map((passName, index) => (
-          <div className="pipeline-pass" key={`${passName}-${index}`}>
-            <GripIcon />
+          <button
+            className={aligned && step === index + 1 ? "pipeline-pass current" : "pipeline-pass"}
+            key={`${passName}-${index}`}
+            type="button"
+            disabled={!aligned}
+            onClick={() => onSelect(index + 1)}
+            title={aligned ? `Show the IR after ${passName}` : passName}
+          >
+            <span className="pipeline-pass-index">{index + 1}</span>
             <span className="pipeline-pass-name">{passName}</span>
-            <button className="pipeline-delete" type="button" disabled title="Delete pass">
-              <XIcon />
-            </button>
-          </div>
+          </button>
         ))}
       </div>
-
-      <button className="pipeline-add" type="button" disabled>
-        <PlusIcon />
-        <span>Add pass</span>
-      </button>
     </section>
   );
 }
 
 function projectRowsFromList(traceList: TraceListResponse): ProjectRow[] {
-  const byName = new Map<string, VersionRow[]>();
-  const add = (projects: TraceListResponse["libraryProjects"], status: VersionRow["status"]) => {
-    for (const project of projects) {
-      const versions = byName.get(project.name) ?? [];
-      versions.push(...project.versions.map((version) => ({ ...version, status })));
-      byName.set(project.name, versions);
-    }
-  };
-  add(traceList.libraryProjects, "imported");
-  add(traceList.tempProjects, "temp");
-
-  return [...byName.entries()]
-    .map(([name, versions]) => {
-      // A temp trace and its imported library copy share a filename within a
-      // project — show it once, preferring the imported (mutable) copy.
-      const byFilename = new Map<string, VersionRow>();
-      for (const version of versions) {
-        const existing = byFilename.get(version.filename);
-        if (!existing) {
-          byFilename.set(version.filename, version);
-          continue;
-        }
-        // Importing copies the file, so the library copy's mtime is the
-        // import time, not the compile time — keep the earliest.
-        const times = [existing.modifiedMs, version.modifiedMs].filter(
-          (time): time is number => typeof time === "number" && time > 0
-        );
-        const preferred = existing.status === "imported" ? existing : version;
-        byFilename.set(version.filename, {
-          ...preferred,
-          modifiedMs: times.length > 0 ? Math.min(...times) : preferred.modifiedMs
-        });
-      }
-      return {
-        name,
-        versions: [...byFilename.values()].sort(
-          (left, right) =>
-            (right.modifiedMs ?? 0) - (left.modifiedMs ?? 0) || right.filename.localeCompare(left.filename)
-        )
-      };
-    })
+  return traceList.projects
+    .map((project) => ({
+      name: project.name,
+      versions: [...project.versions].sort(
+        (left, right) =>
+          (right.modifiedMs ?? 0) - (left.modifiedMs ?? 0) || right.filename.localeCompare(left.filename)
+      )
+    }))
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
 function projectForTrace(traceList: TraceListResponse, trace: OpenTraceResponse): string | null {
   const match = projectRowsFromList(traceList).find((project) =>
-    project.versions.some(
-      (version) => version.filepath === trace.filepath || version.filepath === trace.importedFrom
-    )
+    project.versions.some((version) => version.filepath === trace.filepath)
   );
   return match?.name ?? (trace.meta.name || null);
 }
@@ -427,8 +534,6 @@ function ViewIcon({ view }: { view: ViewId }) {
       return <CfgIcon />;
     case "tree":
       return <TreeIcon />;
-    case "egraph":
-      return <EGraphIcon />;
     case "text":
       return <TextIcon />;
     case "versions":
@@ -480,19 +585,6 @@ function TreeIcon() {
       <circle cx="12" cy="4" r="2" />
       <circle cx="7" cy="20" r="2" />
       <circle cx="17" cy="20" r="2" />
-    </SvgIcon>
-  );
-}
-
-function EGraphIcon() {
-  return (
-    <SvgIcon>
-      <circle cx="8" cy="8" r="3" />
-      <circle cx="16" cy="8" r="3" />
-      <circle cx="12" cy="16" r="3" />
-      <path d="M10.6 8h2.8" />
-      <path d="M9.5 10.5 11 13.2" />
-      <path d="M14.5 10.5 13 13.2" />
     </SvgIcon>
   );
 }
@@ -587,76 +679,10 @@ function RefreshIcon() {
   );
 }
 
-function GripIcon() {
-  return (
-    <svg className="pipeline-grip" viewBox="0 0 24 24" aria-hidden="true">
-      <circle cx="9" cy="7" r="1" />
-      <circle cx="15" cy="7" r="1" />
-      <circle cx="9" cy="12" r="1" />
-      <circle cx="15" cy="12" r="1" />
-      <circle cx="9" cy="17" r="1" />
-      <circle cx="15" cy="17" r="1" />
-    </svg>
-  );
-}
-
-function LockIcon() {
-  return (
-    <svg className="pipeline-lock-icon" viewBox="0 0 24 24" aria-hidden="true">
-      <rect x="6" y="10" width="12" height="10" rx="2" />
-      <path d="M9 10V7a3 3 0 0 1 6 0v3" />
-    </svg>
-  );
-}
-
-function XIcon() {
-  return (
-    <svg className="pipeline-action-icon" viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M6 6l12 12" />
-      <path d="M18 6 6 18" />
-    </svg>
-  );
-}
-
-function PlusIcon() {
-  return (
-    <svg className="pipeline-action-icon" viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M12 5v14" />
-      <path d="M5 12h14" />
-    </svg>
-  );
-}
-
-function RendererPreview({ document }: { document: RenderDocument | null }) {
-  if (!document) {
-    return <div className="empty">Waiting for render document</div>;
-  }
-
-  if (document.diagnostics?.length) {
-    return (
-      <div className="diagnostics">
-        {document.diagnostics.map((diagnostic) => (
-          <div className={`diagnostic ${diagnostic.severity}`} key={diagnostic.code}>
-            <strong>{diagnostic.code}</strong>
-            <span>{diagnostic.message}</span>
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  if (document.text) {
-    return <pre className="text-preview">{document.text.text}</pre>;
-  }
-
-  return <div className="empty">No renderer payload yet</div>;
-}
-
 const fallbackViews: Array<{ id: ViewId; label: string; description: string }> = [
-  { id: "text", label: "Text", description: "Plain Monaco IR snapshots" },
-  { id: "ir-diff", label: "IR Diff", description: "Monaco snapshot diff" },
-  { id: "cfg", label: "CFG", description: "React Flow + Graphviz geometry" },
-  { id: "tree", label: "Tree", description: "D3 flextree operation hierarchy" },
-  { id: "egraph", label: "EGraph", description: "Cytoscape equivalence graph" },
+  { id: "text", label: "Text", description: "IR snapshots" },
+  { id: "ir-diff", label: "IR Diff", description: "Snapshot diff" },
+  { id: "cfg", label: "CFG", description: "Control-flow graph of a function" },
+  { id: "tree", label: "Tree", description: "Operation hierarchy" },
   { id: "versions", label: "Versions", description: "Trace versions of the selected project" }
 ];

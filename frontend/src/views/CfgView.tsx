@@ -15,11 +15,14 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import type { Entity, GraphEdge, GraphLayout, GraphNode, GraphPoint, RenderDocument } from "../api/protocol";
+import { ViewNotice, ViewWarning } from "./ViewNotice";
 
 type CfgViewProps = {
   document: RenderDocument | null;
   rootId?: string;
   onSelectRoot: (rootId: string) => void;
+  /** The shown snapshot, for the toolbar. */
+  snapshot?: string;
 };
 
 type CfgNodeData = {
@@ -43,7 +46,7 @@ const BLOCK_MAX_HEIGHT = 360;
 const GROUP_MIN_HEIGHT = 190;
 const GRAPH_MARGIN = 48;
 
-export function CfgView({ document, rootId, onSelectRoot }: CfgViewProps) {
+export function CfgView({ document, rootId, onSelectRoot, snapshot }: CfgViewProps) {
   const [selected, setSelected] = useState<{ kind: "node"; id: string } | { kind: "edge"; id: string } | null>(null);
 
   const rootEntities = useMemo(() => functionRootEntities(document), [document]);
@@ -63,11 +66,14 @@ export function CfgView({ document, rootId, onSelectRoot }: CfgViewProps) {
   const selectedNode = selected?.kind === "node" ? graph?.nodes.find((node) => node.id === selected.id) : undefined;
 
   return (
-    <section className="cfg-view">
+    <section className={graph && diagnostics.length > 0 ? "cfg-view with-warning" : "cfg-view"}>
       <div className="cfg-toolbar">
         <div className="cfg-title">
           <span>{document?.title ?? "CFG"}</span>
-          <small>{graph?.nodes.length ?? 0} nodes</small>
+          <small>
+            {snapshot ? `${snapshot} · ` : ""}
+            {graph?.nodes.length ?? 0} nodes
+          </small>
         </div>
         {rootEntities.length > 1 ? (
           <label className="cfg-root-select">
@@ -83,14 +89,15 @@ export function CfgView({ document, rootId, onSelectRoot }: CfgViewProps) {
         ) : null}
       </div>
 
+      {graph && diagnostics.length > 0 ? <ViewWarning diagnostics={diagnostics} /> : null}
       {diagnostics.length > 0 && !graph ? (
-        <div className="cfg-diagnostics">
-          {diagnostics.map((diagnostic) => (
-            <div className={`cfg-diagnostic ${diagnostic.severity}`} key={`${diagnostic.code}-${diagnostic.message}`}>
-              <strong>{diagnostic.code}</strong>
-              <span>{diagnostic.message}</span>
-            </div>
-          ))}
+        <ViewNotice diagnostics={diagnostics} />
+      ) : !document ? (
+        <div className="view-notice pending">
+          <span className="spinner" aria-hidden="true" />
+          <div>
+            <p>Reading the IR…</p>
+          </div>
         </div>
       ) : (
         <div className="cfg-workspace">
@@ -316,7 +323,7 @@ function nodeSize(node: GraphNode) {
 }
 
 function functionRootEntities(document: RenderDocument | null) {
-  return (document?.entities ?? []).filter((entity) => entity.interfaces?.includes("FunctionLikeInterface"));
+  return (document?.entities ?? []).filter((entity) => entity.attrs?.cfgRoot === true);
 }
 
 function entityForNode(document: RenderDocument | null, graphNode?: GraphNode) {

@@ -1,13 +1,9 @@
-use std::{
-    collections::BTreeMap,
-    path::{Path, PathBuf},
-};
+use std::{collections::BTreeMap, path::Path};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 pub const TRACE_EXTENSION: &str = "crt";
-pub const DEFAULT_TRACE_DIR: &str = "/tmp/crabbit-events";
 
 const PART_MARKER_PREFIX: &str = "--- crabbit";
 const PART_MARKER_SUFFIX: &str = "---";
@@ -209,12 +205,6 @@ pub fn derive_project_from_stem(stem: &str) -> &str {
         }
     }
     out
-}
-
-pub fn project_trace_path(project: &str, version: &str) -> PathBuf {
-    Path::new(DEFAULT_TRACE_DIR)
-        .join(project)
-        .join(format!("{version}.{TRACE_EXTENSION}"))
 }
 
 fn trace_file_info(path: &Path) -> CrabbitTraceFileInfo {

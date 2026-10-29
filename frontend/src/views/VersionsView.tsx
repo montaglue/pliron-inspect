@@ -1,8 +1,6 @@
 import type { OpenTraceResponse, TraceFileInfo } from "../api/protocol";
 
-export type VersionRow = TraceFileInfo & {
-  status: "imported" | "temp";
-};
+export type VersionRow = TraceFileInfo;
 
 export type ProjectRow = {
   name: string;
@@ -26,8 +24,7 @@ export function VersionsView({ activeTrace, loading, onOpenVersion, project }: V
     );
   }
 
-  const isActive = (version: VersionRow) =>
-    version.filepath === activeTrace?.filepath || version.filepath === activeTrace?.importedFrom;
+  const isActive = (version: VersionRow) => version.filepath === activeTrace?.filepath;
 
   return (
     <section className="versions-view">
@@ -53,9 +50,7 @@ export function VersionsView({ activeTrace, loading, onOpenVersion, project }: V
             <span className="version-name">{version.filename}</span>
             {index === 0 ? <span className="version-latest">latest</span> : null}
             <span className="version-date">{formatModified(version.modifiedMs)}</span>
-            <span className={`trace-status ${isActive(version) ? "active" : version.status}`}>
-              {isActive(version) ? "active" : version.status}
-            </span>
+            {isActive(version) ? <span className="trace-status active">active</span> : null}
           </button>
         ))}
       </div>

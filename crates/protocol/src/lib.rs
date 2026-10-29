@@ -1,5 +1,5 @@
-//! Wire types shared by the pliron-inspect server, drivers and capture.
+//! Wire types of pliron-inspect: the trace file format and the documents
+//! the server sends the UI.
 
-pub mod server;
 pub mod trace;
 pub mod types;

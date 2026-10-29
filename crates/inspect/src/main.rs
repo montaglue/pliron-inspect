@@ -1,9 +1,8 @@
-mod analysis;
-mod analysisd;
-mod driver;
+mod folders;
 mod lsp;
-mod project;
+mod render;
 mod server;
+mod session;
 
 use clap::Parser as ClapParser;
 use std::path::PathBuf;
@@ -12,7 +11,7 @@ use server::{AppState, build_router};
 
 #[derive(ClapParser)]
 #[command(name = "pliron-inspect")]
-#[command(about = "Interactive pliron IR inspector")]
+#[command(about = "Interactive inspector for pliron compiler traces")]
 struct Args {
     /// Port to run the server on.
     #[arg(short, long, default_value = "3000")]
@@ -28,64 +27,18 @@ struct Args {
     #[arg(long)]
     listen_all: bool,
 
-    /// Driver binary path for future CLI-backed render requests.
-    #[arg(long)]
-    driver: Option<String>,
-
-    /// Mutable directory containing imported .crt crabbit event log files.
-    ///
-    /// Defaults to $CRABBIT_DISPLAY_TRACE_DIR, then ~/.crabbit/traces, then
-    /// .crabbit-traces. $CRABBIT_DISPLAY_TRACE_DIR may contain multiple directories
-    /// separated by ';'.
-    #[arg(long)]
-    trace_dir: Option<PathBuf>,
-
-    /// Address of a running `crabbit-analysisd` (or other project
-    /// analysisd) HTTP shim, e.g. 127.0.0.1:8177; enables the analysis
-    /// panels (module upload, runs, per-pass IR with language features).
-    #[arg(long)]
-    server: Option<String>,
-
     /// Directory with the built frontend (index.html + assets). Defaults
-    /// to the checkout's crates/inspect/frontend/dist; the compiled-in
-    /// fallback page is served when neither exists.
+    /// to the checkout's frontend/dist.
     #[arg(long)]
     frontend_dir: Option<PathBuf>,
-
-    /// Worker threads of a project's analysis server (started when a
-    /// project is opened in the UI).
-    #[arg(long, default_value_t = 4)]
-    workers: usize,
-
-    /// Immutable temporary directory where compiler runs write .crt files.
-    ///
-    /// Defaults to $CRABBIT_DISPLAY_TEMP_TRACE_DIR, then crabbit's default temp
-    /// trace directory. $CRABBIT_DISPLAY_TEMP_TRACE_DIR may contain multiple
-    /// directories separated by ';'.
-    #[arg(long)]
-    temp_trace_dir: Option<PathBuf>,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let trace_library_dirs = dirs_from_cli_env_default(
-        args.trace_dir,
-        "CRABBIT_DISPLAY_TRACE_DIR",
-        default_trace_library_dirs(),
-    );
-    let temp_trace_dirs = dirs_from_cli_env_default(
-        args.temp_trace_dir,
-        "CRABBIT_DISPLAY_TEMP_TRACE_DIR",
-        vec![PathBuf::from(pliron_inspect_protocol::trace::DEFAULT_TRACE_DIR)],
-    );
     let state = AppState {
-        driver_binary: args.driver.or_else(default_driver_binary),
-        trace_library_dirs,
-        temp_trace_dirs,
-        analysis_server: args.server,
         frontend_dir: args.frontend_dir,
-        projects: analysis::Projects::new(args.workers),
+        session: session::Session::new(),
     };
 
     let app = build_router(state);
@@ -103,10 +56,7 @@ async fn main() -> anyhow::Result<()> {
         let _ = open::that(&url);
     }
 
-    eprintln!(
-        "Server listening on http://{} (analysis + project panels: http://{}/analysis)",
-        addr, local
-    );
+    eprintln!("Server listening on http://{}", addr);
     if args.listen_all {
         eprintln!(
             "Listening on all interfaces without authentication: anyone who can reach port {} can open projects on this machine",
@@ -117,72 +67,4 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
-}
-
-fn default_trace_library_dir() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| home.join(".crabbit").join("traces"))
-}
-
-fn dirs_from_cli_env_default(
-    cli_dir: Option<PathBuf>,
-    env_name: &str,
-    default_dirs: Vec<PathBuf>,
-) -> Vec<PathBuf> {
-    if let Some(cli_dir) = cli_dir {
-        return vec![cli_dir];
-    }
-
-    let env_dirs = env_dirs(env_name);
-    if env_dirs.is_empty() {
-        default_dirs
-    } else {
-        env_dirs
-    }
-}
-
-fn default_trace_library_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    dirs.push(default_trace_library_dir().unwrap_or_else(|| PathBuf::from(".crabbit-traces")));
-    dirs.push(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-            .join("traces"),
-    );
-    dirs
-}
-
-fn env_dirs(name: &str) -> Vec<PathBuf> {
-    let Some(value) = std::env::var_os(name) else {
-        return vec![];
-    };
-    value
-        .to_string_lossy()
-        .split(';')
-        .map(str::trim)
-        .filter(|entry| !entry.is_empty())
-        .map(PathBuf::from)
-        .collect()
-}
-
-fn default_driver_binary() -> Option<String> {
-    let current_exe = std::env::current_exe().ok()?;
-    let exe_name = format!("pliron-inspect-driver{}", std::env::consts::EXE_SUFFIX);
-
-    let sibling = current_exe.with_file_name(&exe_name);
-    if sibling.exists() {
-        return Some(sibling.to_string_lossy().to_string());
-    }
-
-    let workspace_target = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("target")
-        .join("debug")
-        .join(&exe_name);
-    if workspace_target.exists() {
-        return Some(workspace_target.to_string_lossy().to_string());
-    }
-
-    Some("pliron-inspect-driver".to_string())
 }

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObjec
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api";
 
 import type { TraceSnapshot } from "../api/protocol";
-import { configureCrabbitMonaco } from "./monacoSetup";
+import { IR_LANGUAGE, THEME, configurePlironMonaco } from "./monacoSetup";
 
 export type IrSnapshot = TraceSnapshot;
 
@@ -59,7 +59,7 @@ export function IrDiffView({ snapshots }: IrDiffViewProps) {
   }, []);
 
   useEffect(() => {
-    configureCrabbitMonaco();
+    configurePlironMonaco();
 
     if (!containerRef.current || editorRef.current) return;
 
@@ -67,7 +67,7 @@ export function IrDiffView({ snapshots }: IrDiffViewProps) {
       readOnly: true,
       renderSideBySide: true,
       automaticLayout: true,
-      theme: "crabbit-dark",
+      theme: THEME,
       minimap: { enabled: false },
       scrollBeyondLastLine: false,
       hideUnchangedRegions: {
@@ -111,8 +111,8 @@ export function IrDiffView({ snapshots }: IrDiffViewProps) {
     originalModelRef.current?.dispose();
     modifiedModelRef.current?.dispose();
 
-    const beforeLanguage = previousSnapshot?.isError ? "plaintext" : "crabbit-ir";
-    const afterLanguage = currentSnapshot?.isError ? "plaintext" : "crabbit-ir";
+    const beforeLanguage = previousSnapshot?.isError ? "plaintext" : IR_LANGUAGE;
+    const afterLanguage = currentSnapshot?.isError ? "plaintext" : IR_LANGUAGE;
 
     originalModelRef.current = monaco.editor.createModel(previousSnapshot?.ir ?? "", beforeLanguage);
     modifiedModelRef.current = monaco.editor.createModel(currentSnapshot?.ir ?? "", afterLanguage);

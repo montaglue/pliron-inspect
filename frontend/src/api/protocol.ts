@@ -1,9 +1,8 @@
-export type ViewId = "ir-diff" | "cfg" | "tree" | "egraph" | "text" | "versions";
+export type ViewId = "ir-diff" | "cfg" | "tree" | "text" | "versions";
 
 export type DisplayCapabilities = {
   protocolVersion: number;
   views: ViewCapability[];
-  cliCommands: string[];
   frontend: FrontendStack;
 };
 
@@ -19,16 +18,14 @@ export type TraceProjectInfo = {
 };
 
 export type TraceListResponse = {
-  libraryProjects: TraceProjectInfo[];
-  tempProjects: TraceProjectInfo[];
-  libraryDirs: string[];
-  tempDirs: string[];
+  /** The traces folder, if one is chosen. */
+  dir?: string | null;
+  projects: TraceProjectInfo[];
 };
 
 export type OpenTraceResponse = {
   filepath: string;
   filename: string;
-  importedFrom?: string;
   meta: TraceMeta;
   snapshots: TraceSnapshot[];
   pipeline: string[];
@@ -68,11 +65,10 @@ export type FrontendStack = {
 };
 
 export type RenderRequest = {
+  /** An IR document id from `addIr`. */
+  id: string;
   view: ViewId;
-  snapshotId?: string;
   rootId?: string;
-  options?: Record<string, unknown>;
-  text?: string;
 };
 
 export type RenderDocument = {
@@ -83,7 +79,6 @@ export type RenderDocument = {
   entities: Entity[];
   graph?: GraphDocument;
   tree?: TreeDocument;
-  text?: TextDocument;
   diagnostics?: Diagnostic[];
 };
 
@@ -171,18 +166,6 @@ export type TreeNode = {
   attrs?: Record<string, unknown>;
 };
 
-export type TextDocument = {
-  language: "crabbit-ir" | "plaintext" | string;
-  text: string;
-  spans?: TextSpan[];
-};
-
-export type TextSpan = {
-  entityId: string;
-  start: number;
-  end: number;
-};
-
 export type Diagnostic = {
   severity: "info" | "warning" | "error";
   code: string;
@@ -190,3 +173,52 @@ export type Diagnostic = {
   entityId?: string;
   attrs?: Record<string, unknown>;
 };
+
+/** The dialect engine's state, as pliron-lsp reports it. */
+export type EngineState = "starting" | "syntax-only" | "building" | "ready" | "error" | "exited" | string;
+
+export type SessionState = {
+  dialects: { root: string; state: EngineState; message?: string | null; lsp?: string } | null;
+  traces: string | null;
+};
+
+export type FolderMarks = {
+  cargo: boolean;
+  pliron: boolean;
+  traces: number;
+};
+
+export type FolderListing = {
+  path: string;
+  parent?: string | null;
+  home: string;
+  marks: FolderMarks;
+  folders: { name: string; path: string; marks: FolderMarks }[];
+};
+
+/** An LSP position: 0-based line, UTF-16 column. */
+export type LspPosition = { line: number; character: number };
+export type LspRange = { start: LspPosition; end: LspPosition };
+
+export type HoverResult = { contents?: string | null; range?: LspRange | null; exact: boolean };
+
+export type DefinitionResult = {
+  exact: boolean;
+  /** A definition in the same IR document. */
+  range?: LspRange | null;
+  /** A definition in the dialects' Rust source. */
+  source?: { path: string; position: LspPosition; range?: LspRange | null; text?: string | null };
+};
+
+export type ReferencesResult = { ranges: LspRange[]; exact: boolean };
+
+export type IrDiagnostic = {
+  range: LspRange;
+  severity: "error" | "warning" | "info" | "hint";
+  source?: string | null;
+  /** parse, verify, lint, ... */
+  phase?: string | null;
+  message: string;
+};
+
+export type DiagnosticsResult = { diagnostics: IrDiagnostic[]; exact: boolean };

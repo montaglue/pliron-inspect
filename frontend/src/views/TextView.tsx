@@ -1,20 +1,36 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api";
 
-import type { TraceSnapshot } from "../api/protocol";
-import { configureCrabbitMonaco } from "./monacoSetup";
+import { irDiagnostics } from "../api/client";
+import type { IrDiagnostic, TraceSnapshot } from "../api/protocol";
+import { IR_LANGUAGE, THEME, bindIrId, configurePlironMonaco, setSourceOpener, toRange } from "./monacoSetup";
 
 type TextViewProps = {
   snapshots: TraceSnapshot[];
   step?: number;
   onStepChange?: (step: number) => void;
+  /** The server's id of the shown snapshot, once it has it. */
+  irId: string | null;
+  /** The dialect engine's state; null without a dialects folder. */
+  engineState: string | null;
 };
 
-export function TextView({ snapshots, step, onStepChange }: TextViewProps) {
+type Source = { model: monaco.editor.ITextModel; range: monaco.IRange };
+
+const severities: Record<IrDiagnostic["severity"], monaco.MarkerSeverity> = {
+  error: monaco.MarkerSeverity.Error,
+  warning: monaco.MarkerSeverity.Warning,
+  info: monaco.MarkerSeverity.Info,
+  hint: monaco.MarkerSeverity.Hint
+};
+
+export function TextView({ snapshots, step, onStepChange, irId, engineState }: TextViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
-  const modelRef = useRef<monaco.editor.ITextModel | null>(null);
+  const [model, setModel] = useState<monaco.editor.ITextModel | null>(null);
   const [localStep, setLocalStep] = useState(0);
+  const [problems, setProblems] = useState<{ errors: number; warnings: number } | null>(null);
+  const [source, setSource] = useState<Source | null>(null);
   const currentStep = step ?? localStep;
   const setCurrentStep = (next: number) => {
     setLocalStep(next);
@@ -28,29 +44,30 @@ export function TextView({ snapshots, step, onStepChange }: TextViewProps) {
     return `${label} (${currentStep + 1}/${snapshots.length})`;
   }, [currentSnapshot, currentStep, snapshots.length]);
 
-
   useEffect(() => {
     if (snapshots.length === 0) return;
 
-    configureCrabbitMonaco();
+    configurePlironMonaco();
+    setSourceOpener((sourceModel, range) => setSource({ model: sourceModel, range }));
 
     if (!containerRef.current || editorRef.current) return;
 
     editorRef.current = monaco.editor.create(containerRef.current, {
       readOnly: true,
       automaticLayout: true,
-      theme: "crabbit-dark",
-      language: "crabbit-ir",
+      theme: THEME,
+      language: IR_LANGUAGE,
       minimap: { enabled: false },
       scrollBeyondLastLine: false,
       wordWrap: "off"
     });
 
     return () => {
-      modelRef.current?.dispose();
+      setSourceOpener(null);
+      editorRef.current?.getModel()?.dispose();
       editorRef.current?.dispose();
-      modelRef.current = null;
       editorRef.current = null;
+      setModel(null);
     };
   }, [snapshots.length]);
 
@@ -58,12 +75,61 @@ export function TextView({ snapshots, step, onStepChange }: TextViewProps) {
     const editor = editorRef.current;
     if (!editor || !currentSnapshot) return;
 
-    modelRef.current?.dispose();
-    modelRef.current = monaco.editor.createModel(currentSnapshot.ir, currentSnapshot.isError ? "plaintext" : "crabbit-ir");
-    editor.setModel(modelRef.current);
+    const previous = editor.getModel();
+    const next = monaco.editor.createModel(currentSnapshot.ir, currentSnapshot.isError ? "plaintext" : IR_LANGUAGE);
+    editor.setModel(next);
     editor.setScrollTop(0);
     editor.setScrollLeft(0);
+    if (previous) {
+      bindIrId(previous, null);
+      previous.dispose();
+    }
+    setModel(next);
   }, [currentSnapshot]);
+
+  // The engine's answers (hover, definition, references) need the id.
+  useEffect(() => {
+    if (model) bindIrId(model, irId);
+  }, [model, irId]);
+
+  // Parse and verifier diagnostics of the snapshot, as markers.
+  useEffect(() => {
+    setProblems(null);
+    if (!model || !irId || !engineState) return;
+    let live = true;
+    let timer: number | undefined;
+    let tries = 0;
+    const load = () =>
+      irDiagnostics(irId)
+        .then((result) => {
+          if (!live) return;
+          monaco.editor.setModelMarkers(
+            model,
+            "pliron",
+            result.diagnostics.map((diagnostic) => ({
+              ...toRange(diagnostic.range),
+              severity: severities[diagnostic.severity] ?? monaco.MarkerSeverity.Error,
+              message: diagnostic.message,
+              source: [diagnostic.source, diagnostic.phase].filter(Boolean).join(" ") || undefined
+            }))
+          );
+          if (result.exact) {
+            setProblems({
+              errors: result.diagnostics.filter((diagnostic) => diagnostic.severity === "error").length,
+              warnings: result.diagnostics.filter((diagnostic) => diagnostic.severity === "warning").length
+            });
+          } else if (engineState === "ready" && tries++ < 20) {
+            // The engine is still reading this snapshot.
+            timer = window.setTimeout(load, 1500);
+          }
+        })
+        .catch(() => undefined);
+    load();
+    return () => {
+      live = false;
+      window.clearTimeout(timer);
+    };
+  }, [model, irId, engineState]);
 
   if (snapshots.length === 0) {
     return (
@@ -78,6 +144,27 @@ export function TextView({ snapshots, step, onStepChange }: TextViewProps) {
     <section className="text-view">
       <div className="diff-toolbar">
         <div className={currentSnapshot?.isError ? "step-label error" : "step-label"}>{stepLabel}</div>
+        <div className="text-status">
+          <EngineStatus state={engineState} />
+          {problems ? (
+            <button
+              className={problems.errors ? "problems bad" : problems.warnings ? "problems warn" : "problems ok"}
+              type="button"
+              title="Go to the next problem (F8)"
+              onClick={() => {
+                editorRef.current?.focus();
+                editorRef.current?.trigger("toolbar", "editor.action.marker.next", null);
+              }}
+            >
+              {problems.errors || problems.warnings
+                ? `${problems.errors} error${problems.errors === 1 ? "" : "s"}, ${problems.warnings} warning${problems.warnings === 1 ? "" : "s"}`
+                : "no problems"}
+            </button>
+          ) : null}
+          {engineState === "ready" ? (
+            <span className="text-help">hover · F12 definition · ⇧F12 references · F8 problems</span>
+          ) : null}
+        </div>
         <div className="diff-toolbar-actions">
           <button type="button" onClick={() => setCurrentStep(Math.max(0, currentStep - 1))} disabled={currentStep <= 0}>
             Prev
@@ -91,9 +178,72 @@ export function TextView({ snapshots, step, onStepChange }: TextViewProps) {
           </button>
         </div>
       </div>
-      <div className="text-editor" ref={containerRef} />
+      <div className={source ? "text-panes with-source" : "text-panes"}>
+        <div className="text-editor" ref={containerRef} />
+        {source ? <SourcePane source={source} onClose={() => setSource(null)} /> : null}
+      </div>
     </section>
   );
+}
+
+/** A dialect's Rust source, at a definition. */
+function SourcePane({ source, onClose }: { source: Source; onClose: () => void }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    editorRef.current = monaco.editor.create(containerRef.current, {
+      readOnly: true,
+      automaticLayout: true,
+      theme: THEME,
+      minimap: { enabled: false },
+      scrollBeyondLastLine: false
+    });
+    return () => {
+      editorRef.current?.dispose();
+      editorRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.setModel(source.model);
+    editor.setSelection(source.range);
+    editor.revealRangeInCenter(source.range);
+  }, [source]);
+
+  const path = source.model.uri.path;
+  return (
+    <div className="source-pane">
+      <div className="source-pane-head">
+        <span className="source-pane-path" title={path}>
+          {shortPath(path)}:{source.range.startLineNumber}
+        </span>
+        <button type="button" onClick={onClose} title="Close">
+          ×
+        </button>
+      </div>
+      <div className="source-pane-editor" ref={containerRef} />
+    </div>
+  );
+}
+
+/** A path with cargo's registry prefix shortened to the crate. */
+function shortPath(path: string) {
+  const registry = path.match(/\/registry\/src\/[^/]+\/(.*)$/);
+  if (registry) return registry[1];
+  const git = path.match(/\/git\/checkouts\/[^/]+\/[^/]+\/(.*)$/);
+  return git ? git[1] : path;
+}
+
+function EngineStatus({ state }: { state: string | null }) {
+  if (!state) return <span className="engine-status off">no dialects folder</span>;
+  if (state === "ready") return <span className="engine-status ok">dialect engine</span>;
+  if (state === "building" || state === "starting")
+    return <span className="engine-status warn">dialect engine building…</span>;
+  return <span className="engine-status bad">dialect engine: {state}</span>;
 }
 
 function TraceIcon() {

@@ -1,60 +1,27 @@
-use std::{
-    collections::BTreeMap,
-    path::{Component, Path, PathBuf},
-};
+use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    extract::{Path as AxumPath, State},
-    http::{HeaderMap, StatusCode, header::CONTENT_TYPE},
+    extract::{Path as AxumPath, Query, State},
+    http::{StatusCode, header::CONTENT_TYPE},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
 use pliron_inspect_protocol::trace::{self, TRACE_EXTENSION};
-
-use crate::analysis::Projects;
-use crate::driver;
 use pliron_inspect_protocol::types::*;
+use serde_json::json;
+
+use crate::session::Session;
 
 const PROTOCOL_VERSION: u32 = 1;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub driver_binary: Option<String>,
-    pub trace_library_dirs: Vec<PathBuf>,
-    pub temp_trace_dirs: Vec<PathBuf>,
-    /// Address of a running `crabbit-analysisd` HTTP shim (loopback), if
-    /// the analysis panels are enabled.
-    pub analysis_server: Option<String>,
     /// Directory holding the built frontend (index.html + assets);
-    /// defaults to `<manifest dir>/frontend/dist`.
+    /// defaults to the checkout's `frontend/dist`.
     pub frontend_dir: Option<PathBuf>,
-    /// The project opened from the UI, if any: its trace directories,
-    /// driver, analysis server and pliron-lsp take over the configured ones.
-    pub projects: std::sync::Arc<Projects>,
-}
-
-impl AppState {
-    /// Mutable trace directories: the opened project's, else the configured ones.
-    async fn library_dirs(&self) -> Vec<PathBuf> {
-        match self.projects.opened().await {
-            Some(o) => o.project.trace_dirs.clone(),
-            None => self.trace_library_dirs.clone(),
-        }
-    }
-
-    /// The render driver: the opened project's, else the configured one.
-    async fn driver(&self) -> Option<String> {
-        match self.projects.opened().await {
-            Some(o) => o
-                .project
-                .driver
-                .as_ref()
-                .map(|p| p.to_string_lossy().into_owned())
-                .or_else(|| self.driver_binary.clone()),
-            None => self.driver_binary.clone(),
-        }
-    }
+    pub session: Arc<Session>,
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -62,87 +29,165 @@ pub fn build_router(state: AppState) -> Router {
         .route("/", get(serve_index))
         .route("/api/health", get(health))
         .route("/api/capabilities", get(capabilities))
+        .route("/api/state", get(session_state))
+        .route("/api/folders", get(list_folders))
+        .route("/api/dialects", post(open_dialects))
+        .route("/api/dialects/close", post(close_dialects))
+        .route("/api/traces/folder", post(set_traces_folder))
         .route("/api/traces", get(list_traces))
-        .route("/api/traces/import", post(import_trace))
         .route("/api/traces/open", post(open_trace))
-        .route("/api/render", post(render_document))
-        .route("/api/analysis", post(analysis_proxy))
-        .route("/api/analysis/health", get(analysis_health))
-        .route("/api/project", get(project_info))
-        .route("/api/project/open", post(project_open))
-        .route("/api/project/close", post(project_close))
-        .route("/analysis", get(serve_analysis_page))
+        .route("/api/traces/import", post(import_trace))
+        .route("/api/ir", post(add_ir))
+        .route("/api/ir/render", post(render_ir))
+        .route("/api/ir/{query}", post(ir_query))
         .route("/{*path}", get(serve_dist_asset))
         .layer(axum::extract::DefaultBodyLimit::max(256 * 1024 * 1024))
         .with_state(state)
 }
 
-async fn list_traces(State(state): State<AppState>) -> Response {
-    let library_dirs = state.library_dirs().await;
-    let library_projects = match discover_trace_projects(&library_dirs) {
-        Ok(projects) => projects,
-        Err(error) => return error_response(error),
-    };
-    let temp_projects = match discover_trace_projects(&state.temp_trace_dirs) {
-        Ok(projects) => projects,
-        Err(error) => return error_response(error),
-    };
+fn bad_request(error: impl std::fmt::Display) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "error": error.to_string() })),
+    )
+        .into_response()
+}
 
+async fn health() -> impl IntoResponse {
+    Json(HealthResponse { ok: true })
+}
+
+async fn capabilities() -> impl IntoResponse {
+    Json(DisplayCapabilities {
+        protocol_version: PROTOCOL_VERSION,
+        views: vec![
+            ViewCapability::new(
+                "text",
+                "Text",
+                "IR snapshots, with the dialects' hover, definitions and diagnostics",
+            ),
+            ViewCapability::new("ir-diff", "IR Diff", "Snapshot diff"),
+            ViewCapability::new("cfg", "CFG", "Control-flow graph of a function"),
+            ViewCapability::new("tree", "Tree", "Operation hierarchy"),
+            ViewCapability::new(
+                "versions",
+                "Versions",
+                "Trace versions of the selected project",
+            ),
+        ],
+        frontend: FrontendStack {
+            framework: "React".to_string(),
+            bundler: "Vite".to_string(),
+            language: "TypeScript".to_string(),
+            graph: "React Flow + Flowblocks geometry".to_string(),
+            tree: "D3 + d3-flextree".to_string(),
+            text: "Monaco".to_string(),
+            egraph: "Cytoscape.js".to_string(),
+        },
+    })
+}
+
+async fn session_state(State(state): State<AppState>) -> Response {
+    Json(state.session.state().await).into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct FoldersQuery {
+    path: Option<String>,
+}
+
+/// The folder picker's listing of `path` (default: the home directory).
+async fn list_folders(Query(query): Query<FoldersQuery>) -> Response {
+    match crate::folders::list(query.path.as_deref()) {
+        Ok(listing) => Json(listing).into_response(),
+        Err(error) => bad_request(error),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct FolderRequest {
+    path: String,
+}
+
+/// Use `path` (a folder under the home directory) as the dialects folder:
+/// pliron-lsp is started on it. Asynchronous: `/api/state` reports it.
+async fn open_dialects(State(state): State<AppState>, Json(req): Json<FolderRequest>) -> Response {
+    match crate::folders::resolve(&req.path) {
+        Ok(root) => {
+            state.session.open_dialects(root).await;
+            Json(state.session.state().await).into_response()
+        }
+        Err(error) => bad_request(error),
+    }
+}
+
+async fn close_dialects(State(state): State<AppState>) -> Response {
+    state.session.close_dialects().await;
+    Json(state.session.state().await).into_response()
+}
+
+/// Read traces from `path` (a folder under the home directory).
+async fn set_traces_folder(
+    State(state): State<AppState>,
+    Json(req): Json<FolderRequest>,
+) -> Response {
+    match crate::folders::resolve(&req.path) {
+        Ok(dir) => {
+            state.session.set_traces(dir).await;
+            Json(state.session.state().await).into_response()
+        }
+        Err(error) => bad_request(error),
+    }
+}
+
+async fn list_traces(State(state): State<AppState>) -> Response {
+    let dir = state.session.traces().await;
+    let projects = match &dir {
+        Some(dir) => match trace::discover_trace_projects(dir) {
+            Ok(projects) => projects,
+            Err(error) => return bad_request(format!("{error:#}")),
+        },
+        None => Vec::new(),
+    };
     Json(TraceListResponse {
-        library_projects,
-        temp_projects,
-        library_dirs: display_dirs(&library_dirs),
-        temp_dirs: display_dirs(&state.temp_trace_dirs),
+        dir: dir.map(|d| d.to_string_lossy().into_owned()),
+        projects,
     })
     .into_response()
 }
 
 async fn open_trace(State(state): State<AppState>, Json(req): Json<OpenTraceRequest>) -> Response {
-    let mut path = match std::fs::canonicalize(&req.filepath) {
-        Ok(path) => path,
-        Err(error) => {
-            return error_response(anyhow::anyhow!(
-                "cannot resolve trace path '{}': {}",
-                req.filepath,
-                error
-            ));
-        }
+    let Some(dir) = state.session.traces().await else {
+        return bad_request("choose a traces folder first");
     };
-
-    if !is_trace_path(&path) {
-        return error_response(anyhow::anyhow!(
-            "expected a .{} trace file: {}",
-            TRACE_EXTENSION,
+    let path = match std::fs::canonicalize(&req.filepath) {
+        Ok(path) => path,
+        Err(error) => return bad_request(format!("{}: {error}", req.filepath)),
+    };
+    if !path.starts_with(&dir) {
+        return bad_request(format!("{} is not in the traces folder", path.display()));
+    }
+    if path.extension().and_then(|ext| ext.to_str()) != Some(TRACE_EXTENSION) {
+        return bad_request(format!(
+            "expected a .{TRACE_EXTENSION} trace file: {}",
             path.display()
         ));
     }
-
-    let imported_from = if is_inside_any_dir(&path, &state.temp_trace_dirs) {
-        let source = path.clone();
-        let library_dirs = state.library_dirs().await;
-        match import_temp_trace(&library_dirs, &state.temp_trace_dirs, &source) {
-            Ok(imported) => {
-                path = imported;
-                Some(source.to_string_lossy().to_string())
-            }
-            Err(error) => return error_response(error),
-        }
-    } else {
-        None
-    };
-
-    let trace = match trace::CrabbitTraceFile::read(&path) {
-        Ok(trace) => trace,
-        Err(error) => return error_response(error),
-    };
-
-    trace_response(path, imported_from, trace)
+    match trace::CrabbitTraceFile::read(&path) {
+        Ok(trace) => trace_response(path, trace),
+        Err(error) => bad_request(format!("{error:#}")),
+    }
 }
 
+/// Save an uploaded trace into the traces folder (in its project's
+/// subfolder) and open it.
 async fn import_trace(
     State(state): State<AppState>,
     Json(req): Json<ImportTraceRequest>,
 ) -> Response {
+    let Some(dir) = state.session.traces().await else {
+        return bad_request("choose a traces folder first");
+    };
     let filename = Path::new(&req.filename)
         .file_name()
         .and_then(|filename| filename.to_str())
@@ -156,19 +201,8 @@ async fn import_trace(
     let trace = match trace::CrabbitTraceFile::from_crt_str(&req.contents) {
         Ok(trace) => trace,
         Err(error) => {
-            return error_response(anyhow::anyhow!(
-                "failed to parse imported trace '{}': {}",
-                req.filename,
-                error
-            ));
+            return bad_request(format!("{}: not a trace: {error:#}", req.filename));
         }
-    };
-
-    let library_dirs = state.library_dirs().await;
-    let Some(trace_library_dir) = library_dirs.first() else {
-        return error_response(anyhow::anyhow!(
-            "no trace library directories are configured"
-        ));
     };
 
     let stem = Path::new(&filename)
@@ -176,33 +210,21 @@ async fn import_trace(
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
-    let project_dir = trace_library_dir.join(trace::derive_project_from_stem(&stem));
+    let project_dir = dir.join(trace::derive_project_from_stem(&stem));
     if let Err(error) = std::fs::create_dir_all(&project_dir) {
-        return error_response(error.into());
+        return bad_request(format!("{}: {error}", project_dir.display()));
     }
-
     let mut path = project_dir.join(&filename);
     if path.exists() {
-        path = unique_trace_destination(&project_dir, std::ffi::OsStr::new(&filename));
+        path = unique_trace_destination(&project_dir, &filename);
     }
-
     if let Err(error) = trace.write(&path) {
-        return error_response(error);
+        return bad_request(format!("{error:#}"));
     }
-
-    let path = match std::fs::canonicalize(&path) {
-        Ok(path) => path,
-        Err(error) => return error_response(error.into()),
-    };
-
-    trace_response(path, None, trace)
+    trace_response(path, trace)
 }
 
-fn trace_response(
-    path: PathBuf,
-    imported_from: Option<String>,
-    trace: trace::CrabbitTraceFile,
-) -> Response {
+fn trace_response(path: PathBuf, trace: trace::CrabbitTraceFile) -> Response {
     let filename = path
         .file_name()
         .unwrap_or_default()
@@ -221,7 +243,6 @@ fn trace_response(
     Json(OpenTraceResponse {
         filepath: path.to_string_lossy().to_string(),
         filename,
-        imported_from,
         meta: trace.meta,
         snapshots,
         pipeline,
@@ -229,268 +250,94 @@ fn trace_response(
     .into_response()
 }
 
-async fn health(State(state): State<AppState>) -> impl IntoResponse {
-    Json(HealthResponse {
-        ok: true,
-        driver_binary: state.driver().await,
-    })
-}
-
-/// The compiled-in analysis page (always, even when a built frontend is
-/// served at `/`).
-async fn serve_analysis_page() -> Response {
-    Html(include_str!("static/index.html").to_string()).into_response()
-}
-
-async fn project_info(State(state): State<AppState>) -> Response {
-    Json(state.projects.info().await).into_response()
+fn unique_trace_destination(dir: &Path, filename: &str) -> PathBuf {
+    let stem = Path::new(filename)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("trace");
+    for index in 1.. {
+        let candidate = dir.join(format!("{stem}-{index}.{TRACE_EXTENSION}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!()
 }
 
 #[derive(serde::Deserialize)]
-struct OpenProjectRequest {
-    root: String,
+struct AddIrRequest {
+    text: String,
 }
 
-/// Open the project at `root` (a cargo workspace or package): discover its
-/// trace directories, driver and analysis server (built if needed), start
-/// the analysis server and pliron-lsp on it. Asynchronous: `/api/project`
-/// reports the state.
-async fn project_open(
-    State(state): State<AppState>,
-    Json(req): Json<OpenProjectRequest>,
-) -> Response {
-    let root = PathBuf::from(shellexpand_home(&req.root));
-    if !root.is_dir() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": format!("{} is not a directory", root.display()) })),
-        )
-            .into_response();
-    }
-    state.projects.open(root).await;
-    Json(state.projects.info().await).into_response()
+/// Keep an IR snapshot the UI shows; the views and language queries refer
+/// to it by the returned id.
+async fn add_ir(State(state): State<AppState>, Json(req): Json<AddIrRequest>) -> Response {
+    let id = state.session.add_doc(req.text).await;
+    Json(json!({ "id": id })).into_response()
 }
 
-async fn project_close(State(state): State<AppState>) -> Response {
-    state.projects.close().await;
-    Json(state.projects.info().await).into_response()
-}
-
-fn shellexpand_home(path: &str) -> String {
-    match path.strip_prefix("~/") {
-        Some(rest) => dirs::home_dir()
-            .map(|h| h.join(rest).to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.to_string()),
-        None => path.to_string(),
-    }
-}
-
-async fn capabilities() -> impl IntoResponse {
-    Json(DisplayCapabilities {
-        protocol_version: PROTOCOL_VERSION,
-        views: vec![
-            ViewCapability::new("text", "Text", "Plain Monaco IR snapshots"),
-            ViewCapability::new("ir-diff", "IR Diff", "Monaco snapshot diff"),
-            ViewCapability::new("cfg", "CFG", "React Flow + Flowblocks geometry"),
-            ViewCapability::new("tree", "Tree", "D3 flextree operation hierarchy"),
-            ViewCapability::new("egraph", "EGraph", "Cytoscape equivalence graph"),
-            ViewCapability::new("versions", "Versions", "Trace versions of the selected project"),
-        ],
-        cli_commands: vec![
-            "list_capabilities".to_string(),
-            "parse_ir".to_string(),
-            "run_pipeline".to_string(),
-            "render".to_string(),
-        ],
-        frontend: FrontendStack {
-            framework: "React".to_string(),
-            bundler: "Vite".to_string(),
-            language: "TypeScript".to_string(),
-            graph: "React Flow + Flowblocks geometry".to_string(),
-            tree: "D3 + d3-flextree".to_string(),
-            text: "Monaco".to_string(),
-            egraph: "Cytoscape.js".to_string(),
-        },
-    })
-}
-
-async fn render_document(
-    State(state): State<AppState>,
-    Json(mut req): Json<RenderRequest>,
-) -> impl IntoResponse {
-    let snapshot_id = req
-        .snapshot_id
-        .clone()
-        .unwrap_or_else(|| "ad-hoc".to_string());
-    let view = req.view.clone();
-    let title = req
-        .root_id
-        .as_ref()
-        .map(|root| format!("{view} render for {root}"))
-        .unwrap_or_else(|| format!("{view} render"));
-
-    let document = match view.as_str() {
-        "text" | "ir-diff" => RenderDocument {
-            version: PROTOCOL_VERSION,
-            view: view.clone(),
-            title: Some(title),
-            snapshot_id: snapshot_id.clone(),
-            entities: vec![],
-            graph: None,
-            tree: None,
-            text: Some(TextDocument {
-                language: req
-                    .options
-                    .get("language")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or("crabbit-ir")
-                    .to_string(),
-                text: req.text.unwrap_or_default(),
-                spans: vec![],
-            }),
-            diagnostics: vec![],
-        },
-        "cfg" | "tree" => match state.driver().await.as_deref() {
-            Some(driver_binary) => {
-                req.snapshot_id = Some(snapshot_id.clone());
-                match driver::render_document(driver_binary, &req).await {
-                    Ok(document) => document,
-                    Err(error) => diagnostic_document(
-                        view,
-                        snapshot_id,
-                        title,
-                        "driver-error",
-                        format!("CLI render failed: {error}"),
-                    ),
-                }
-            }
-            None => diagnostic_document(
-                view,
-                snapshot_id,
-                title,
-                "driver-missing",
-                "No pliron-inspect-driver driver binary is configured.",
-            ),
-        },
-        "egraph" => diagnostic_document(
-            view,
-            snapshot_id,
-            title,
-            "renderer-not-wired",
-            "This view is registered, but CLI-backed semantic rendering is not wired yet.",
-        ),
-        unknown => diagnostic_document(
-            unknown.to_string(),
-            snapshot_id,
-            title,
-            "unknown-view",
-            format!("Unknown render view: {unknown}"),
-        ),
-    };
-
-    Json(document)
-}
-
-fn diagnostic_document(
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RenderIrRequest {
+    id: String,
     view: String,
-    snapshot_id: String,
-    title: String,
-    code: impl Into<String>,
-    message: impl Into<String>,
-) -> RenderDocument {
-    RenderDocument {
-        version: PROTOCOL_VERSION,
-        view,
-        title: Some(title),
-        snapshot_id,
-        entities: vec![],
-        graph: None,
-        tree: None,
-        text: None,
-        diagnostics: vec![Diagnostic {
-            severity: DiagnosticSeverity::Info,
-            code: code.into(),
-            message: message.into(),
-            entity_id: None,
-            attrs: BTreeMap::new(),
-        }],
-    }
+    #[serde(default)]
+    root_id: Option<String>,
 }
 
-/// One server-protocol command object, answered as JSON. The whole
-/// analysis API is this single generic route: the frontend speaks the same
-/// wire commands as stdio/curl clients. With a project open, the command
-/// goes to the project's analysis server (or, for the `ir_*` language
-/// queries, to pliron-lsp); otherwise to the configured `--server` shim.
-async fn analysis_proxy(
+async fn render_ir(State(state): State<AppState>, Json(req): Json<RenderIrRequest>) -> Response {
+    Json(
+        state
+            .session
+            .render(&req.id, &req.view, req.root_id.as_deref())
+            .await,
+    )
+    .into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct IrQueryRequest {
+    id: String,
+    #[serde(default)]
+    position: Option<serde_json::Value>,
+}
+
+/// `hover`, `definition`, `references` (at an LSP position) or
+/// `diagnostics` of an IR snapshot, from its dialect engine.
+async fn ir_query(
     State(state): State<AppState>,
-    Json(cmd): Json<serde_json::Value>,
+    AxumPath(query): AxumPath<String>,
+    Json(req): Json<IrQueryRequest>,
 ) -> Response {
-    if let Some(value) = state.projects.handle(&cmd).await {
-        return Json(value).into_response();
-    }
-    let Some(addr) = state.analysis_server.clone() else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({"error": "no project is open and no analysis server is configured; open a project in the UI, or start crabbit-analysisd --http 127.0.0.1:PORT and pass --server 127.0.0.1:PORT"})),
-        )
-            .into_response();
-    };
-    match forward_analysis(&addr, &cmd).await {
+    match state
+        .session
+        .language(&query, &req.id, req.position.as_ref())
+        .await
+    {
         Ok(value) => Json(value).into_response(),
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({"error": format!("analysis server unreachable at {addr}: {e}")})),
-        )
-            .into_response(),
+        Err(error) => bad_request(error),
     }
-}
-
-async fn analysis_health(State(state): State<AppState>) -> Response {
-    analysis_proxy(State(state), Json(serde_json::json!({"cmd": "server_health"}))).await
-}
-
-/// Minimal HTTP/1.1 POST to the analysis shim (std TcpStream on a blocking
-/// thread; the shim closes the connection after each response).
-async fn forward_analysis(
-    addr: &str,
-    cmd: &serde_json::Value,
-) -> anyhow::Result<serde_json::Value> {
-    let addr = addr.to_string();
-    let body = cmd.to_string();
-    tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
-        use std::io::{Read, Write};
-        let mut stream = std::net::TcpStream::connect(&addr)?;
-        stream.set_read_timeout(Some(std::time::Duration::from_secs(600)))?;
-        write!(
-            stream,
-            "POST / HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        )?;
-        let mut response = Vec::new();
-        stream.read_to_end(&mut response)?;
-        let text = String::from_utf8_lossy(&response);
-        let payload = text
-            .split_once("\r\n\r\n")
-            .map(|(_, b)| b)
-            .unwrap_or(&text);
-        Ok(serde_json::from_str(payload)?)
-    })
-    .await?
 }
 
 fn frontend_dir(state: &AppState) -> PathBuf {
-    state
-        .frontend_dir
-        .clone()
-        .unwrap_or_else(|| manifest_dir().join("frontend").join("dist"))
+    state.frontend_dir.clone().unwrap_or_else(|| {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("frontend")
+            .join("dist")
+    })
 }
 
+/// The built frontend, or a page that says how to build it.
 async fn serve_index(State(state): State<AppState>) -> Response {
-    let dist_index = frontend_dir(&state).join("index.html");
-    match std::fs::read_to_string(&dist_index) {
+    let dist = frontend_dir(&state);
+    match std::fs::read_to_string(dist.join("index.html")) {
         Ok(contents) => Html(contents).into_response(),
-        Err(_) => Html(include_str!("static/index.html").to_string()).into_response(),
+        Err(_) => {
+            Html(include_str!("static/index.html").replace("{{dist}}", &dist.display().to_string()))
+                .into_response()
+        }
     }
 }
 
@@ -524,10 +371,6 @@ fn safe_dist_path(dist: &Path, path: &str) -> Option<PathBuf> {
     Some(out)
 }
 
-fn manifest_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-}
-
 fn content_type_for(path: &Path) -> &'static str {
     match path.extension().and_then(|ext| ext.to_str()) {
         Some("css") => "text/css; charset=utf-8",
@@ -536,150 +379,7 @@ fn content_type_for(path: &Path) -> &'static str {
         Some("json") => "application/json; charset=utf-8",
         Some("svg") => "image/svg+xml",
         Some("wasm") => "application/wasm",
+        Some("ttf") => "font/ttf",
         _ => "application/octet-stream",
     }
-}
-
-fn is_trace_path(path: &Path) -> bool {
-    path.extension().and_then(|ext| ext.to_str()) == Some(TRACE_EXTENSION)
-}
-
-/// Project a trace belongs to: the name of its project subfolder when it is
-/// nested inside one of the trace roots, otherwise (legacy flat layout)
-/// derived from the filename stem.
-fn project_for_source(source: &Path, roots: &[PathBuf]) -> String {
-    let in_project_folder = source.parent().is_some_and(|parent| {
-        roots
-            .iter()
-            .filter_map(|root| std::fs::canonicalize(root).ok())
-            .any(|root| parent != root && parent.starts_with(root))
-    });
-    if in_project_folder {
-        if let Some(folder) = source.parent().and_then(|parent| parent.file_name()) {
-            return folder.to_string_lossy().to_string();
-        }
-    }
-    let stem = source
-        .file_stem()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-    trace::derive_project_from_stem(&stem).to_string()
-}
-
-fn is_inside_any_dir(path: &Path, dirs: &[PathBuf]) -> bool {
-    dirs.iter().any(|dir| is_inside_dir(path, dir))
-}
-
-fn is_inside_dir(path: &Path, dir: &Path) -> bool {
-    let Ok(dir) = std::fs::canonicalize(dir) else {
-        return false;
-    };
-    path.starts_with(dir)
-}
-
-fn import_temp_trace(
-    library_dirs: &[PathBuf],
-    temp_dirs: &[PathBuf],
-    source: &Path,
-) -> anyhow::Result<PathBuf> {
-    let trace_library_dir = library_dirs
-        .first()
-        .ok_or_else(|| anyhow::anyhow!("no trace library directories are configured"))?;
-    let project_dir = trace_library_dir.join(project_for_source(source, temp_dirs));
-    std::fs::create_dir_all(&project_dir)?;
-    let filename = source
-        .file_name()
-        .ok_or_else(|| anyhow::anyhow!("trace path has no filename: {}", source.display()))?;
-    let mut destination = project_dir.join(filename);
-    if destination.exists() {
-        destination = unique_trace_destination(&project_dir, filename);
-    }
-
-    std::fs::copy(source, &destination).map_err(|error| {
-        anyhow::anyhow!(
-            "failed to import immutable temp trace {} into {}: {}",
-            source.display(),
-            destination.display(),
-            error
-        )
-    })?;
-    std::fs::canonicalize(&destination).map_err(|error| {
-        anyhow::anyhow!(
-            "failed to resolve imported trace {}: {}",
-            destination.display(),
-            error
-        )
-    })
-}
-
-fn discover_trace_projects(
-    dirs: &[PathBuf],
-) -> anyhow::Result<Vec<pliron_inspect_protocol::trace::CrabbitTraceProjectInfo>> {
-    let mut merged: BTreeMap<String, Vec<pliron_inspect_protocol::trace::CrabbitTraceFileInfo>> = BTreeMap::new();
-    for dir in dirs {
-        for project in trace::discover_trace_projects(dir)? {
-            merged
-                .entry(project.name)
-                .or_default()
-                .extend(project.versions.into_iter().map(canonical_trace_info));
-        }
-    }
-    Ok(merged
-        .into_iter()
-        .map(|(name, mut versions)| {
-            versions.sort_by(|left, right| left.filepath.cmp(&right.filepath));
-            versions.dedup_by(|left, right| left.filepath == right.filepath);
-            trace::sort_versions_newest_first(&mut versions);
-            pliron_inspect_protocol::trace::CrabbitTraceProjectInfo { name, versions }
-        })
-        .collect())
-}
-
-fn canonical_trace_info(
-    trace: pliron_inspect_protocol::trace::CrabbitTraceFileInfo,
-) -> pliron_inspect_protocol::trace::CrabbitTraceFileInfo {
-    let filepath = std::fs::canonicalize(&trace.filepath)
-        .map(|path| path.to_string_lossy().to_string())
-        .unwrap_or(trace.filepath);
-    pliron_inspect_protocol::trace::CrabbitTraceFileInfo { filepath, ..trace }
-}
-
-fn display_dirs(dirs: &[PathBuf]) -> Vec<String> {
-    dirs.iter()
-        .map(|dir| dir.to_string_lossy().to_string())
-        .collect()
-}
-
-fn unique_trace_destination(dir: &Path, filename: &std::ffi::OsStr) -> PathBuf {
-    let path = Path::new(filename);
-    let stem = path
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or("trace");
-    let extension = path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .unwrap_or(TRACE_EXTENSION);
-    for index in 1.. {
-        let candidate = dir.join(format!("{stem}-{index}.{extension}"));
-        if !candidate.exists() {
-            return candidate;
-        }
-    }
-    unreachable!()
-}
-
-fn error_response(error: anyhow::Error) -> Response {
-    let mut headers = HeaderMap::new();
-    headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        headers,
-        serde_json::to_string(&ErrorResponse {
-            error: error.to_string(),
-        })
-        .unwrap(),
-    )
-        .into_response()
 }

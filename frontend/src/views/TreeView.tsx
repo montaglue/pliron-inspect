@@ -2,9 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { flextree } from "d3-flextree";
 
 import type { Entity, RenderDocument, TreeNode } from "../api/protocol";
+import { ViewNotice, ViewWarning } from "./ViewNotice";
 
 type TreeViewProps = {
   document: RenderDocument | null;
+  /** The shown snapshot, for the toolbar. */
+  snapshot?: string;
 };
 
 type TreeLayoutNode = {
@@ -37,7 +40,7 @@ const ZOOM_MIN = 0.35;
 const ZOOM_MAX = 2.5;
 const ZOOM_STEP = 0.15;
 
-export function TreeView({ document }: TreeViewProps) {
+export function TreeView({ document, snapshot }: TreeViewProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [query, setQuery] = useState("");
@@ -60,14 +63,7 @@ export function TreeView({ document }: TreeViewProps) {
   if (diagnostics.length > 0 && !tree) {
     return (
       <section className="tree-view">
-        <div className="tree-diagnostics">
-          {diagnostics.map((diagnostic) => (
-            <div className={`tree-diagnostic ${diagnostic.severity}`} key={`${diagnostic.code}-${diagnostic.message}`}>
-              <strong>{diagnostic.code}</strong>
-              <span>{diagnostic.message}</span>
-            </div>
-          ))}
-        </div>
+        <ViewNotice diagnostics={diagnostics} />
       </section>
     );
   }
@@ -75,7 +71,12 @@ export function TreeView({ document }: TreeViewProps) {
   if (!tree || !layout) {
     return (
       <section className="tree-view">
-        <div className="tree-empty">No tree document</div>
+        <div className="view-notice pending">
+          <span className="spinner" aria-hidden="true" />
+          <div>
+            <p>Reading the IR…</p>
+          </div>
+        </div>
       </section>
     );
   }
@@ -102,11 +103,14 @@ export function TreeView({ document }: TreeViewProps) {
   const zoomBy = (delta: number) => setZoom((value) => clampZoom(value + delta));
 
   return (
-    <section className="tree-view">
+    <section className={diagnostics.length > 0 ? "tree-view with-warning" : "tree-view"}>
       <div className="tree-toolbar">
         <div className="tree-title">
           <span>{document?.title ?? "Tree"}</span>
-          <small>{layout.nodes.length} visible nodes</small>
+          <small>
+            {snapshot ? `${snapshot} · ` : ""}
+            {layout.nodes.length} visible nodes
+          </small>
         </div>
         <div className="tree-tools">
           <input
@@ -147,6 +151,7 @@ export function TreeView({ document }: TreeViewProps) {
           </div>
         </div>
       </div>
+      {diagnostics.length > 0 ? <ViewWarning diagnostics={diagnostics} /> : null}
       <div className="tree-workspace">
         <div className="tree-canvas">
           <svg

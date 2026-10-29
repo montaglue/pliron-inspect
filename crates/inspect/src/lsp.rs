@@ -1,13 +1,12 @@
 //! pliron-lsp as a child process: the inspector is an LSP client.
 //!
-//! The IR documents the UI serves (a loaded module, a run's IR after a
-//! pass) are opened in pliron-lsp as virtual files under the project root,
-//! so it routes them to the project's dialect engine, which it generates
-//! and builds from the project's own dialect crates (instrumenting the
-//! project's pliron) and rebuilds when their sources change. Hover,
-//! definition, references and diagnostics then come from the real parsers
-//! and verifiers, with the dialects' Rust docs and source locations, for
-//! any project, with no code in the project.
+//! The IR snapshots the UI shows are opened in pliron-lsp as virtual files
+//! under the dialects folder, so it routes them to that folder's dialect
+//! engine, which it generates and builds from the folder's own dialect
+//! crates (instrumenting their pliron) and rebuilds when their sources
+//! change. The IR model, hover, definition, references and diagnostics
+//! then come from the real parsers and verifiers, with the dialects' Rust
+//! docs and source locations, for any project, with no code in the project.
 //!
 //! Only what the UI needs is implemented: JSON-RPC framing, requests with
 //! responses, the notifications pliron-lsp sends (`pliron/status`,
@@ -124,8 +123,7 @@ impl Lsp {
         self.inner.status.lock().await.clone()
     }
 
-    /// Open `text` as the virtual file `path` (once); returns its URI. For a
-    /// changed text of the same path, the document is replaced.
+    /// Open `text` as the virtual file `path` (once); returns its URI.
     pub async fn open(&self, path: &Path, text: &str) -> anyhow::Result<String> {
         let uri = file_uri(path);
         let fresh = self.opened.lock().await.insert(uri.clone());
@@ -137,6 +135,21 @@ impl Lsp {
             .await?;
         }
         Ok(uri)
+    }
+
+    /// Close the virtual file `path`, if it is open.
+    pub async fn close(&self, path: &Path) -> anyhow::Result<()> {
+        let uri = file_uri(path);
+        if !self.opened.lock().await.remove(&uri) {
+            return Ok(());
+        }
+        self.inner.analyses.lock().await.remove(&uri);
+        self.inner.diagnostics.lock().await.remove(&uri);
+        self.notify(
+            "textDocument/didClose",
+            json!({ "textDocument": { "uri": uri } }),
+        )
+        .await
     }
 
     /// Wait until the engine has analyzed `uri` (or `timeout` passes).
@@ -203,6 +216,30 @@ impl Lsp {
         )
         .await
     }
+}
+
+/// The pliron-lsp binary: `$PLIRON_LSP`, next to this executable, in
+/// `~/.cargo/bin`, or on the `PATH`.
+pub fn find_pliron_lsp() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("PLIRON_LSP") {
+        return Some(PathBuf::from(p));
+    }
+    let name = format!("pliron-lsp{}", std::env::consts::EXE_SUFFIX);
+    let mut candidates = Vec::new();
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        candidates.push(dir.join(&name));
+    }
+    if let Some(home) = dirs::home_dir() {
+        candidates.push(home.join(".cargo").join("bin").join(&name));
+    }
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            candidates.push(dir.join(&name));
+        }
+    }
+    candidates.into_iter().find(|p| p.is_file())
 }
 
 pub fn file_uri(path: &Path) -> String {

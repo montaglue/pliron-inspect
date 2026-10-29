@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct HealthResponse {
     pub ok: bool,
-    pub driver_binary: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -18,10 +17,9 @@ pub struct ErrorResponse {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TraceListResponse {
-    pub library_projects: Vec<crate::trace::CrabbitTraceProjectInfo>,
-    pub temp_projects: Vec<crate::trace::CrabbitTraceProjectInfo>,
-    pub library_dirs: Vec<String>,
-    pub temp_dirs: Vec<String>,
+    /// The traces folder, if one is chosen.
+    pub dir: Option<String>,
+    pub projects: Vec<crate::trace::CrabbitTraceProjectInfo>,
 }
 
 #[derive(Deserialize)]
@@ -42,8 +40,6 @@ pub struct ImportTraceRequest {
 pub struct OpenTraceResponse {
     pub filepath: String,
     pub filename: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub imported_from: Option<String>,
     pub meta: crate::trace::CrabbitTraceMeta,
     pub snapshots: Vec<TraceSnapshot>,
     pub pipeline: Vec<String>,
@@ -61,7 +57,6 @@ pub struct TraceSnapshot {
 pub struct DisplayCapabilities {
     pub protocol_version: u32,
     pub views: Vec<ViewCapability>,
-    pub cli_commands: Vec<String>,
     pub frontend: FrontendStack,
 }
 
@@ -95,20 +90,6 @@ pub struct FrontendStack {
     pub egraph: String,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RenderRequest {
-    pub view: String,
-    #[serde(default)]
-    pub snapshot_id: Option<String>,
-    #[serde(default)]
-    pub root_id: Option<String>,
-    #[serde(default)]
-    pub options: BTreeMap<String, serde_json::Value>,
-    #[serde(default)]
-    pub text: Option<String>,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct RenderDocument {
@@ -122,8 +103,6 @@ pub struct RenderDocument {
     pub graph: Option<GraphDocument>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tree: Option<TreeDocument>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub text: Option<TextDocument>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -258,23 +237,6 @@ pub struct TreeNode {
     pub children: Vec<TreeNode>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub attrs: BTreeMap<String, serde_json::Value>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct TextDocument {
-    pub language: String,
-    pub text: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub spans: Vec<TextSpan>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct TextSpan {
-    pub entity_id: String,
-    pub start: usize,
-    pub end: usize,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

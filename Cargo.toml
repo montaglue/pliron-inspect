@@ -10,14 +10,10 @@ repository = "https://github.com/montaglue/pliron-inspect"
 readme = "README.md"
 
 [workspace.dependencies]
-pliron = "0.20.0"
-pliron-llvm = { version = "0.20.0", default-features = false }
 pliron-inspect-protocol = { version = "0.1.0", path = "crates/protocol" }
-pliron-inspect-driver = { version = "0.1.0", path = "crates/driver" }
-# The syntax layer of the pliron language server (github.com/montaglue/pliron-lsp).
-pliron-ir-syntax = { git = "https://github.com/montaglue/pliron-lsp.git", rev = "519ad37f1c1f1a41ff155bab5d39a9b93d8bee43" }
+# The IR model of pliron-lsp's dialect engines (github.com/montaglue/pliron-lsp).
+pliron-lsp-protocol = { git = "https://github.com/montaglue/pliron-lsp.git", rev = "519ad37f1c1f1a41ff155bab5d39a9b93d8bee43" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-toml = "0.8"
