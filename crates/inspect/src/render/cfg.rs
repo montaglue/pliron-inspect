@@ -96,7 +96,7 @@ impl<'a> CfgBuilder<'a> {
             });
         }
 
-        let layout = build_flowblocks_layout(&self.nodes, &self.edges);
+        let layout = isolated_layout(&self.nodes, &self.edges);
         (
             self.entities,
             GraphDocument {
@@ -140,8 +140,10 @@ impl<'a> CfgBuilder<'a> {
             .map_or(0, |op| self.ir.model().ops[*op as usize].successors.len());
 
         let mut operation_text = Vec::new();
+        let mut op_lines = Vec::new();
         let mut nested_ops = Vec::new();
         for op in ops {
+            op_lines.extend(self.ir.op_line(op));
             let opid = self.ir.opid(op).to_string();
             let successors = self.ir.model().ops[op as usize].successors.clone();
             for (successor_index, succ) in successors.iter().copied().enumerate() {
@@ -184,6 +186,9 @@ impl<'a> CfgBuilder<'a> {
         let mut attrs = BTreeMap::new();
         attrs.insert("blockArgs".to_string(), json!(args));
         attrs.insert("operationText".to_string(), json!(operation_text));
+        // Where the block's ops are in the snapshot, for per-op data
+        // (profiles) keyed by line.
+        attrs.insert("opLines".to_string(), json!(op_lines));
         attrs.insert("successorCount".to_string(), json!(succ_count));
         attrs.insert("depth".to_string(), json!(depth));
         attrs.insert("isNested".to_string(), json!(parent_id.is_some()));
@@ -307,6 +312,54 @@ impl<'a> CfgBuilder<'a> {
             self.entities.push(entity);
         }
     }
+}
+
+/// The flowblocks layout, computed in a child process: its C++ core can
+/// abort on some graphs, which must not take the server down. `None` (the
+/// UI lays the graph out itself) when the child fails.
+fn isolated_layout(nodes: &[GraphNode], edges: &[GraphEdge]) -> Option<GraphLayout> {
+    if cfg!(test) {
+        return build_flowblocks_layout(nodes, edges);
+    }
+    use std::io::Write;
+    let input = serde_json::to_vec(&(nodes, edges)).ok()?;
+    let mut child = std::process::Command::new(std::env::current_exe().ok()?)
+        .arg(LAYOUT_WORKER_FLAG)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    child.stdin.take()?.write_all(&input).ok()?;
+    let output = child.wait_with_output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    serde_json::from_slice(&output.stdout).ok()?
+}
+
+/// The argument that makes the binary a one-shot layout worker.
+pub const LAYOUT_WORKER_FLAG: &str = "--cfg-layout-worker";
+
+/// The layout worker: graph on stdin, layout (or `null`) on stdout.
+pub fn layout_worker() -> ! {
+    use std::io::Read;
+    let mut input = Vec::new();
+    let code = match std::io::stdin().read_to_end(&mut input) {
+        Ok(_) => match serde_json::from_slice::<(Vec<GraphNode>, Vec<GraphEdge>)>(&input) {
+            Ok((nodes, edges)) => {
+                let layout = build_flowblocks_layout(&nodes, &edges);
+                println!(
+                    "{}",
+                    serde_json::to_string(&layout).unwrap_or_else(|_| "null".into())
+                );
+                0
+            }
+            Err(_) => 1,
+        },
+        Err(_) => 1,
+    };
+    std::process::exit(code)
 }
 
 fn build_flowblocks_layout(nodes: &[GraphNode], edges: &[GraphEdge]) -> Option<GraphLayout> {

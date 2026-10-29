@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import {
   addIr,
@@ -21,6 +21,7 @@ import type {
   TraceSnapshot,
   ViewId
 } from "./api/protocol";
+import { type Bpgo, bpgoOf, snapshotProfile } from "./profile";
 import { FolderIcon } from "./start/FolderPicker";
 import { StartView, engineLine } from "./start/StartView";
 import { CfgView } from "./views/CfgView";
@@ -246,6 +247,9 @@ function Viewer({ session, onChangeFolders }: { session: SessionState; onChangeF
   const projectRows = traceList ? projectRowsFromList(traceList) : [];
   const selectedProjectRow = projectRows.find((project) => project.name === selectedProject) ?? null;
   const pipeline = activeTrace?.pipeline ?? [];
+  const bpgo = useMemo(() => bpgoOf(activeTrace?.meta), [activeTrace]);
+  const profile = useMemo(() => snapshotProfile(bpgo, snapshotStep), [bpgo, snapshotStep]);
+  const profileNote = useMemo(() => (bpgo && !profile ? whereProfileStops(bpgo, snapshots) : null), [bpgo, profile, snapshots]);
 
   return (
     <main className={sidebarCollapsed ? "app-shell sidebar-collapsed" : "app-shell"}>
@@ -297,6 +301,7 @@ function Viewer({ session, onChangeFolders }: { session: SessionState; onChangeF
           snapshots={snapshots}
           step={snapshotStep}
           onSelect={(step) => setSnapshotStep(step)}
+          profiled={bpgo}
         />
       </aside>
 
@@ -311,6 +316,8 @@ function Viewer({ session, onChangeFolders }: { session: SessionState; onChangeF
               onStepChange={setSnapshotStep}
               irId={irId}
               engineState={engineState}
+              profile={profile}
+              profileNote={profileNote}
             />
           ) : activeView === "ir-diff" ? (
             snapshots.length > 0 ? (
@@ -339,6 +346,7 @@ function Viewer({ session, onChangeFolders }: { session: SessionState; onChangeF
               rootId={cfgRootId}
               onSelectRoot={setCfgRootId}
               snapshot={snapshotLabel(snapshots, snapshotStep)}
+              profile={profile}
             />
           ) : (
             <TreeView document={document} snapshot={snapshotLabel(snapshots, snapshotStep)} />
@@ -347,6 +355,15 @@ function Viewer({ session, onChangeFolders }: { session: SessionState; onChangeF
       </section>
     </main>
   );
+}
+
+/** Where the trace's profile stops, in words (for a snapshot it misses). */
+function whereProfileStops(bpgo: Bpgo, snapshots: TraceSnapshot[]): string {
+  const stops = Object.values(bpgo.stops ?? {});
+  const stop = stops.filter((s) => s.pass).sort((a, b) => b.reached - a.reached)[0];
+  if (!stop) return "This snapshot has no profile.";
+  const label = snapshots[stop.reached]?.label ?? `snapshot ${stop.reached}`;
+  return `The profile reaches back to ${label}: ${stop.reason}.`;
 }
 
 function snapshotLabel(snapshots: TraceSnapshot[], step: number) {
@@ -468,15 +485,19 @@ function PipelinePanel({
   passes,
   snapshots,
   step,
-  onSelect
+  onSelect,
+  profiled
 }: {
   passes: string[];
   snapshots: TraceSnapshot[];
   step: number;
   onSelect: (step: number) => void;
+  /** The trace's profile: passes whose output has one are marked. */
+  profiled: Bpgo | null;
 }) {
   // Snapshot 0 is the input; snapshot i + 1 is the IR after pass i.
   const aligned = snapshots.length === passes.length + 1;
+  const withProfile = new Set(Object.keys(profiled?.snapshots ?? {}).map(Number));
   return (
     <section className="pipeline-panel" aria-label="Pass pipeline">
       <div className="pipeline-header">
@@ -491,12 +512,19 @@ function PipelinePanel({
         {passes.length === 0 ? <div className="pipeline-empty">No pipeline recorded</div> : null}
         {passes.map((passName, index) => (
           <button
-            className={aligned && step === index + 1 ? "pipeline-pass current" : "pipeline-pass"}
+            className={[
+              "pipeline-pass",
+              aligned && step === index + 1 ? "current" : "",
+              withProfile.has(index + 1) ? "profiled" : ""
+            ].join(" ")}
             key={`${passName}-${index}`}
             type="button"
             disabled={!aligned}
             onClick={() => onSelect(index + 1)}
-            title={aligned ? `Show the IR after ${passName}` : passName}
+            title={
+              (aligned ? `Show the IR after ${passName}` : passName) +
+              (withProfile.has(index + 1) ? " (has a measured profile)" : "")
+            }
           >
             <span className="pipeline-pass-index">{index + 1}</span>
             <span className="pipeline-pass-name">{passName}</span>

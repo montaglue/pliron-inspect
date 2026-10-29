@@ -35,6 +35,9 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    if std::env::args().nth(1).as_deref() == Some(render::cfg::LAYOUT_WORKER_FLAG) {
+        render::cfg::layout_worker();
+    }
     let args = Args::parse();
     let state = AppState {
         frontend_dir: args.frontend_dir,

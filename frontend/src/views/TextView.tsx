@@ -3,6 +3,7 @@ import * as monaco from "monaco-editor/esm/vs/editor/editor.api";
 
 import { irDiagnostics } from "../api/client";
 import type { IrDiagnostic, TraceSnapshot } from "../api/protocol";
+import { type SnapshotProfile, compact, decisions, describe, heatLevel, percent } from "../profile";
 import { IR_LANGUAGE, THEME, bindIrId, configurePlironMonaco, setSourceOpener, toRange } from "./monacoSetup";
 
 type TextViewProps = {
@@ -13,6 +14,10 @@ type TextViewProps = {
   irId: string | null;
   /** The dialect engine's state; null without a dialects folder. */
   engineState: string | null;
+  /** The measured profile of the shown snapshot, if the trace has one. */
+  profile?: SnapshotProfile | null;
+  /** Why the trace's profile does not reach this snapshot, if it does not. */
+  profileNote?: string | null;
 };
 
 type Source = { model: monaco.editor.ITextModel; range: monaco.IRange };
@@ -24,7 +29,7 @@ const severities: Record<IrDiagnostic["severity"], monaco.MarkerSeverity> = {
   hint: monaco.MarkerSeverity.Hint
 };
 
-export function TextView({ snapshots, step, onStepChange, irId, engineState }: TextViewProps) {
+export function TextView({ snapshots, step, onStepChange, irId, engineState, profile, profileNote }: TextViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const [model, setModel] = useState<monaco.editor.ITextModel | null>(null);
@@ -92,6 +97,42 @@ export function TextView({ snapshots, step, onStepChange, irId, engineState }: T
     if (model) bindIrId(model, irId);
   }, [model, irId]);
 
+  // The measured profile: heat on each op's line, its numbers after it.
+  useEffect(() => {
+    const editor = editorRef.current;
+    // The snapshot may have changed under us: decorate only the model the
+    // editor shows (the effect runs again once `model` catches up).
+    if (!editor || !model || model.isDisposed() || editor.getModel() !== model) return;
+    const decorations: monaco.editor.IModelDeltaDecoration[] = [];
+    if (profile) {
+      for (const [line, metrics] of profile.byLine) {
+        if (line < 1 || line > model.getLineCount()) continue;
+        const cycles = metrics.cycles ?? 0;
+        const level = heatLevel(cycles, profile.maxCycles);
+        const own = decisions(metrics);
+        const notable = cycles >= profile.total * 0.002 || own.length > 0;
+        const parts: string[] = [];
+        if (cycles > 0) parts.push(`${compact(cycles)} cycles ${percent(cycles, profile.total)}`);
+        if (metrics.executions) parts.push(`${compact(metrics.executions)}×`);
+        for (const [name, value] of own) parts.push(`${name.replace(/\.cycles$/, "")} ${compact(value)}`);
+        const end = model.getLineMaxColumn(line);
+        decorations.push({
+          range: new monaco.Range(line, 1, line, end),
+          options: {
+            isWholeLine: true,
+            className: level > 0 ? `profile-heat-${level}` : undefined,
+            hoverMessage: { value: describe(metrics, profile.total) },
+            after: notable && parts.length > 0 ? { content: `   ${parts.join(" · ")}`, inlineClassName: "profile-after" } : undefined
+          }
+        });
+      }
+    }
+    const collection = editor.createDecorationsCollection(decorations);
+    return () => {
+      if (!model.isDisposed()) collection.clear();
+    };
+  }, [model, profile]);
+
   // Parse and verifier diagnostics of the snapshot, as markers.
   useEffect(() => {
     setProblems(null);
@@ -146,6 +187,15 @@ export function TextView({ snapshots, step, onStepChange, irId, engineState }: T
         <div className={currentSnapshot?.isError ? "step-label error" : "step-label"}>{stepLabel}</div>
         <div className="text-status">
           <EngineStatus state={engineState} />
+          {profile ? (
+            <span className="profile-status" title="Measured profile of this snapshot, from the compiler's backward passes">
+              profile · {compact(profile.total)} cycles
+            </span>
+          ) : profileNote ? (
+            <span className="profile-status off" title={profileNote}>
+              no profile here
+            </span>
+          ) : null}
           {problems ? (
             <button
               className={problems.errors ? "problems bad" : problems.warnings ? "problems warn" : "problems ok"}

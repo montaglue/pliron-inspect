@@ -2030,3 +2030,63 @@ button {
 .view-warning p {
   margin: 0;
 }
+
+/* ---- measured profiles (backward PGO) --------------------------------- */
+
+.profile-heat-1 {
+  background: rgba(255, 140, 60, 0.08);
+}
+
+.profile-heat-2 {
+  background: rgba(255, 130, 50, 0.16);
+}
+
+.profile-heat-3 {
+  background: rgba(255, 110, 40, 0.26);
+}
+
+.profile-heat-4 {
+  background: rgba(255, 90, 30, 0.38);
+}
+
+.profile-heat-5 {
+  background: rgba(255, 70, 20, 0.52);
+}
+
+.profile-after {
+  color: #e3a36b !important;
+  font-style: italic;
+  opacity: 0.9;
+}
+
+.profile-status {
+  border: 1px solid #8a4b1c;
+  border-radius: 10px;
+  padding: 1px 9px;
+  white-space: nowrap;
+  font-size: 12px;
+  color: #f0a060;
+}
+
+.profile-status.off {
+  border-color: #374151;
+  color: #8b949e;
+}
+
+.pipeline-pass.profiled {
+  border-left: 3px solid #d9773a;
+}
+
+.cfg-block-node.profile-heat-1,
+.cfg-block-node.profile-heat-2,
+.cfg-block-node.profile-heat-3,
+.cfg-block-node.profile-heat-4,
+.cfg-block-node.profile-heat-5 {
+  border-color: #b5622c;
+}
+
+.cfg-node-profile {
+  margin-left: 8px;
+  color: #f0a060;
+  font-weight: 500;
+}

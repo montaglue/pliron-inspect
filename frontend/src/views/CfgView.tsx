@@ -15,6 +15,7 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import type { Entity, GraphEdge, GraphLayout, GraphNode, GraphPoint, RenderDocument } from "../api/protocol";
+import { type Metrics, type SnapshotProfile, compact, heatLevel, percent, sumLines } from "../profile";
 import { ViewNotice, ViewWarning } from "./ViewNotice";
 
 type CfgViewProps = {
@@ -23,10 +24,14 @@ type CfgViewProps = {
   onSelectRoot: (rootId: string) => void;
   /** The shown snapshot, for the toolbar. */
   snapshot?: string;
+  /** The snapshot's measured profile, if any: blocks are heated by it. */
+  profile?: SnapshotProfile | null;
 };
 
 type CfgNodeData = {
   graphNode: GraphNode;
+  /** The block's measured profile and its heat (0..5). */
+  heat?: { metrics: Metrics; level: number; total: number };
 };
 
 type CfgEdgeData = {
@@ -46,17 +51,18 @@ const BLOCK_MAX_HEIGHT = 360;
 const GROUP_MIN_HEIGHT = 190;
 const GRAPH_MARGIN = 48;
 
-export function CfgView({ document, rootId, onSelectRoot, snapshot }: CfgViewProps) {
+export function CfgView({ document, rootId, onSelectRoot, snapshot, profile }: CfgViewProps) {
   const [selected, setSelected] = useState<{ kind: "node"; id: string } | { kind: "edge"; id: string } | null>(null);
 
   const rootEntities = useMemo(() => functionRootEntities(document), [document]);
   const diagnostics = document?.diagnostics ?? [];
   const selectedRoot = rootId ?? rootEntities.find((entity) => entity.attrs?.selected === true)?.id ?? rootEntities[0]?.id;
   const graph = document?.graph;
-  const layout = useMemo(
+  const shape = useMemo(
     () => (graph ? layoutGraph(graph.nodes, graph.edges, graph.layout) : { nodes: [], edges: [] }),
     [graph]
   );
+  const layout = useMemo(() => withHeat(shape, profile ?? null), [shape, profile]);
 
   const selectedEntity =
     selected?.kind === "node"
@@ -175,11 +181,20 @@ function CfgBlockNode({ data }: NodeProps<Node<CfgNodeData>>) {
   const attrs = data.graphNode.attrs ?? {};
   const args = Array.isArray(attrs.blockArgs) ? attrs.blockArgs.map(String) : [];
   const operationText = Array.isArray(attrs.operationText) ? attrs.operationText.map(String) : [];
+  const heat = data.heat;
 
   return (
-    <div className="cfg-node cfg-block-node">
+    <div className={heat && heat.level > 0 ? `cfg-node cfg-block-node profile-heat-${heat.level}` : "cfg-node cfg-block-node"}>
       <Handle type="target" position={Position.Top} />
-      <div className="cfg-node-title">{data.graphNode.label}</div>
+      <div className="cfg-node-title">
+        {data.graphNode.label}
+        {heat ? (
+          <span className="cfg-node-profile">
+            {heat.metrics.cycles ? `${compact(heat.metrics.cycles)} cycles ${percent(heat.metrics.cycles, heat.total)}` : ""}
+            {heat.metrics.executions ? ` · ${compact(heat.metrics.executions)}×` : ""}
+          </span>
+        ) : null}
+      </div>
       {args.length > 0 ? (
         <div className="cfg-node-args">
           {args.map((arg, index) => (
@@ -214,6 +229,29 @@ function CfgGroupNode({ data }: NodeProps<Node<CfgNodeData>>) {
       {operationText ? <code>{operationText}</code> : null}
     </div>
   );
+}
+
+/** Each block's measured profile (its ops' lines summed), as heat. */
+function withHeat(layout: FlowLayout, profile: SnapshotProfile | null): FlowLayout {
+  if (!profile) return layout;
+  let max = 0;
+  const sums = layout.nodes.map((node) => {
+    const lines = node.data.graphNode.attrs?.opLines;
+    const metrics = Array.isArray(lines) ? sumLines(profile, lines.map(Number)) : null;
+    max = Math.max(max, metrics?.cycles ?? 0);
+    return metrics;
+  });
+  return {
+    ...layout,
+    nodes: layout.nodes.map((node, index) => {
+      const metrics = sums[index];
+      if (!metrics) return node;
+      return {
+        ...node,
+        data: { ...node.data, heat: { metrics, level: heatLevel(metrics.cycles ?? 0, max), total: profile.total } }
+      };
+    })
+  };
 }
 
 const nodeTypes = {

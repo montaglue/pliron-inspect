@@ -99,6 +99,15 @@ impl Ir {
             .collect()
     }
 
+    /// The 1-based line the op starts on in the snapshot.
+    fn op_line(&self, op: u32) -> Option<u32> {
+        self.op_ranges
+            .get(op as usize)
+            .copied()
+            .flatten()
+            .map(|r| r.start.line + 1)
+    }
+
     fn op_first_line(&self, op: u32) -> String {
         self.op_lines(op).into_iter().next().unwrap_or_default()
     }
